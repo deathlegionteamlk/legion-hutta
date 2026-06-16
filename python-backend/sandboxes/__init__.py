@@ -11,7 +11,6 @@ kernel contract:
   - LocalSubprocessSandbox : runs `python -u` as a child process (default)
   - E2BSandbox             : runs code in an E2B cloud sandbox
   - DaytonaSandbox         : runs code in a Daytona cloud dev env
-  - MockCloudSandbox       : simulates a cloud sandbox locally (no creds needed)
 
 Backends that require credentials degrade gracefully: if the relevant
 SDK / API key is not configured, the sandbox reports `available=False`
@@ -695,65 +694,11 @@ class DaytonaSandbox(BaseSandbox):
             return {"variables": []}
 
 
-# ---- Mock cloud backend (for demos / dev without cloud creds) ----
-
-
-class MockCloudSandbox(BaseSandbox):
-    """Simulated cloud sandbox.
-
-    Executes code locally but tags events as if from a cloud sandbox
-    so the UI can be demoed end-to-end without cloud credentials.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._inner = LocalSubprocessSandbox()
-        self._inner.sandbox_id = self.sandbox_id
-
-    @staticmethod
-    def spec() -> SandboxSpec:
-        return SandboxSpec(
-            name="mock-cloud",
-            display_name="Mock Cloud (demo)",
-            description="Simulated cloud sandbox that runs locally. For demos without cloud credentials.",
-            icon="cloud",
-            requires_api_key=False,
-        )
-
-    async def is_available(self) -> tuple[bool, str]:
-        return True, "ok"
-
-    async def start(self) -> None:
-        await self._inner.start()
-
-    async def execute(self, req: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
-        yield ExecutionEvent(
-            type="status",
-            text="busy",
-            data={"execution_count": req.execution_count, "sandbox": "mock-cloud"},
-        )
-        async for ev in self._inner.execute(req):
-            yield ev
-
-    async def interrupt(self) -> None:
-        await self._inner.interrupt()
-
-    async def restart(self) -> None:
-        await self._inner.restart()
-
-    async def shutdown(self) -> None:
-        await self._inner.shutdown()
-
-    async def introspect(self) -> dict[str, Any]:
-        return await self._inner.introspect()
-
-
 # ---- Registry ----
 
 
 SANDBOX_REGISTRY: dict[str, type[BaseSandbox]] = {
     "local": LocalSubprocessSandbox,
-    "mock-cloud": MockCloudSandbox,
     "e2b": E2BSandbox,
     "daytona": DaytonaSandbox,
 }
@@ -793,7 +738,6 @@ __all__ = [
     "LocalSubprocessSandbox",
     "E2BSandbox",
     "DaytonaSandbox",
-    "MockCloudSandbox",
     "SANDBOX_REGISTRY",
     "list_sandbox_specs",
 ]

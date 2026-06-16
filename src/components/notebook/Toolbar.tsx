@@ -7,11 +7,12 @@
  *  - Legion Hutta branding / title
  *  - Notebook filename (editable)
  *  - Run All / Add cell buttons
- *  - Sandbox picker (Local / Mock / E2B / Daytona)
+ *  - Sandbox picker (Local / E2B / Daytona)
  *  - Kernel status pill + Interrupt / Restart
  *  - Variables inspector toggle
  *  - AI assistant toggle
  *  - Save / Open / New notebook
+ *  - Export (.legion native / .ipynb interop) + Import
  *  - Command palette (Ctrl+P)
  *  - Theme toggle
  */
@@ -31,6 +32,10 @@ import {
   Variable,
   FolderOpen,
   Command as CommandIcon,
+  Download,
+  Upload,
+  FileJson,
+  FileCode2,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -43,6 +48,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { KernelStatus } from "@/types/notebook";
 import { SandboxPicker } from "./SandboxPicker";
@@ -67,6 +80,9 @@ export function Toolbar() {
   const toggleNotebooksPanel = useNotebookStore((s) => s.toggleNotebooksPanel);
   const toggleCommandPalette = useNotebookStore((s) => s.toggleCommandPalette);
   const saveCurrentNotebook = useNotebookStore((s) => s.saveCurrentNotebook);
+  const exportLegion = useNotebookStore((s) => s.exportLegion);
+  const exportIpynb = useNotebookStore((s) => s.exportIpynb);
+  const importFromFile = useNotebookStore((s) => s.importFromFile);
   const aiPanelOpen = useNotebookStore((s) => s.aiPanelOpen);
   const variablesPanelOpen = useNotebookStore((s) => s.variablesPanelOpen);
 
@@ -91,7 +107,7 @@ export function Toolbar() {
               </span>
             </div>
             <span className="text-[10px] text-muted-foreground/70">
-              better than all notebooks
+              v0.3 · better than all notebooks
             </span>
           </div>
         </div>
@@ -290,60 +306,59 @@ export function Toolbar() {
               </TooltipContent>
             </Tooltip>
 
-            {/* Export as .ipynb */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-8 w-8"
-                  onClick={() => {
-                    const state = useNotebookStore.getState();
-                    const payload = {
-                      nbformat: 4,
-                      nbformat_minor: 5,
-                      metadata: {
-                        name: state.title,
-                        kernelspec: state.kernelSpec
-                          ? {
-                              name: state.kernelSpec.name,
-                              display_name: state.kernelSpec.display_name,
-                              language: state.kernelSpec.language,
-                            }
-                          : null,
-                      },
-                      cells: state.cells.map((c) => ({
-                        cell_type: c.kind,
-                        source: c.source.split("\n"),
-                        execution_count: c.executionCount,
-                        outputs:
-                          c.kind === "code"
-                            ? c.outputs.map((o) => ({
-                                output_type: o.type,
-                                name: o.type,
-                                text: o.text.split("\n"),
-                              }))
-                            : [],
-                      })),
-                    };
-                    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-                      type: "application/json",
-                    });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = state.title.endsWith(".ipynb") ? state.title : `${state.title}.ipynb`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
+            {/* Export (.legion native + .ipynb interop) */}
+            <DropdownMenu>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="icon" variant="ghost" className="h-8 w-8">
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-[11px]">
+                    Export notebook
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  Export as
+                </DropdownMenuLabel>
+                <DropdownMenuItem onClick={exportLegion} className="gap-2">
+                  <FileJson className="h-3.5 w-3.5 text-violet-500" />
+                  <div className="flex flex-col">
+                    <span className="text-[12px] font-medium">Legion (.legion)</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Native format — keeps sandbox + AI history
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={exportIpynb} className="gap-2">
+                  <FileCode2 className="h-3.5 w-3.5 text-amber-500" />
+                  <div className="flex flex-col">
+                    <span className="text-[12px] font-medium">Jupyter (.ipynb)</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      nbformat 4 — opens in Jupyter
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => importFromFile()}
+                  className="gap-2"
                 >
-                  <Save className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-[11px]">
-                Export as .ipynb
-              </TooltipContent>
-            </Tooltip>
+                  <Upload className="h-3.5 w-3.5 text-emerald-500" />
+                  <div className="flex flex-col">
+                    <span className="text-[12px] font-medium">Import file…</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Load a .legion or .ipynb from disk
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* Theme toggle */}
             <Tooltip>

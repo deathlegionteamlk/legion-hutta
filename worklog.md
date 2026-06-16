@@ -159,3 +159,58 @@ Stage Summary:
   Adding Python-on-E2B or JavaScript-on-Local is now a small, well-scoped change.
 - Both services run locally: Next.js (auto-dev on 3000) + Python backend (`scripts/start-python-backend.sh` on 8000, double-fork detached). The Caddy gateway on port 81 routes `?XTransformPort=8000` calls to the backend.
 - Lint clean. No runtime errors. All features verified end-to-end via Agent Browser.
+
+---
+Task ID: v0.3
+Agent: main
+Task: Introduce a new native file type for Legion (.legion) and remove the mock sandbox.
+
+Work Log:
+- Removed `MockCloudSandbox` class and its registry entry from `python-backend/sandboxes/__init__.py`. Updated module docstring, `SANDBOX_REGISTRY`, and `__all__`. Backend now ships three real backends only: `local`, `e2b`, `daytona`.
+- Updated `python-backend/main.py` `CreateKernelRequest.sandbox` field docstring to drop `mock-cloud` from the list of valid values.
+- Designed the **`.legion` native file format (v1)**:
+  - Top-level: `{format: "legion", format_version: 1, metadata, cells, ai_history?}`
+  - `metadata`: title, kernel {name, display_name, language}, sandbox, created_at, updated_at, legion_version, extensions
+  - `cells[]`: id, kind ("code"|"markdown"), source, execution_count, outputs[]
+  - `outputs[]`: type (stdout|stderr|result|error|status), text, data (MIME bundle), timestamp
+  - `ai_history[]`: optional, {id, role, content} — preserves AI Assistant conversation
+  - Versioned: readers MUST check `format_version`; future versions can migrate.
+- Created `src/lib/legion-format.ts` (~430 lines) with:
+  - `serializeLegion(opts)` — runtime state -> LegionDocument
+  - `parseLegion(json)` — strict JSON parse + normalize, rejects unsupported versions
+  - `normalizeLegion(data)` — coerce unknown shape into valid v1, fills defaults
+  - `legionToIpynb(doc)` — convert to nbformat 4, preserves MIME bundles, drops status outputs, stashes Legion metadata under `metadata.legion-hutta` for round-trip
+  - `ipynbToLegion(json)` — parse Jupyter notebooks (stream/error/display_data/execute_result outputs), pulls sandbox back from `metadata.legion-hutta.sandbox` if present
+  - `downloadLegion(doc, filename)` and `downloadIpynb(doc, filename)` — trigger browser downloads
+  - `pickAndLoadNotebookFile()` — file picker that accepts `.legion` or `.ipynb`, auto-detects format
+- Extended the Zustand store (`src/lib/notebook-store.ts`):
+  - Default title is now `legion-hutta.legion`
+  - `newNotebook()` defaults to `untitled.legion`
+  - Added `exportLegion()`, `exportIpynb()`, `importFromFile()`, `importFromLegionJson()`, `importFromIpynbJson()`, `applyLegionDocument(doc)` actions
+  - `applyLegionDocument` re-ids cells, restores AI history, resets kernel, and starts a fresh kernel matching the doc's sandbox+kernel spec (with fallback to defaults)
+  - Updated welcome cell text to describe v0.3 features
+- Replaced the old single "Export as .ipynb" button in `Toolbar.tsx` with a proper Export dropdown:
+  - **Legion (.legion)** — native format, preserves sandbox + AI history
+  - **Jupyter (.ipynb)** — nbformat 4, opens in Jupyter
+  - **Import file…** — opens `.legion` or `.ipynb` from disk
+  - Added new icons (`Download`, `Upload`, `FileJson`, `FileCode2`)
+  - Updated brand subtitle to "v0.3 · better than all notebooks"
+  - Updated module docstring (removed "Mock" mention from sandbox list)
+- Updated `src/lib/notebook-persistence.ts` default `createNotebook` title from `untitled.ipynb` to `untitled.legion`
+- Added 4 new public API v1 endpoints in `python-backend/main.py` for agentic AIs:
+  - `GET  /api/v1/format/spec` — returns the .legion format schema + endpoint map
+  - `POST /api/v1/format/legion` — validate + normalize a partial .legion document to canonical v1
+  - `POST /api/v1/format/legion/to-ipynb` — convert .legion -> nbformat 4
+  - `POST /api/v1/format/ipynb/to-legion` — convert nbformat 4 -> .legion
+  - All gated by the existing `X-Legion-Key` auth.
+- Updated `main.py` module docstring to list the new format endpoints.
+
+Stage Summary:
+- v0.3 ships two cleanups the user asked for:
+  1. **Mock sandbox removed.** No more fake "Mock Cloud (demo)" backend — only real execution backends remain (Local, E2B, Daytona). The sandbox abstraction is now exclusively for places code actually runs.
+  2. **Native `.legion` file format introduced.** A purpose-built JSON format for Legion Hutta notebooks that:
+     - Carries Legion-specific metadata (`sandbox`, `ai_history`) that `.ipynb` has no place for
+     - Is versioned (`format_version: 1`) with a clear migration path
+     - Round-trips losslessly through the frontend store
+     - Converts to/from `.ipynb` (nbformat 4) for Jupyter interop, with Legion metadata preserved under `metadata.legion-hutta` so a round-trip doesn't lose sandbox info
+- AI agents get first-class `.legion` support via the new v1 format endpoints: they can validate documents, convert between formats, and introspect the schema programmatically. An agent can now build a notebook from scratch, POST it to `/api/v1/format/legion` to validate, convert to `.ipynb` if needed, and execute on a kernel — all without the UI.

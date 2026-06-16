@@ -87,7 +87,7 @@ export async function getNotebook(id: string): Promise<NotebookRecord | null> {
 }
 
 export async function createNotebook(
-  title: string = "untitled.ipynb",
+  title: string = "untitled.legion",
   kernelSpec: string | null = "python3",
   sandbox: string | null = "local",
   initialCells?: CellModel[],

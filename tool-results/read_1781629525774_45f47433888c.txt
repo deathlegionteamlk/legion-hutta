@@ -1,0 +1,800 @@
+     1→"""
+     2→Sandbox abstraction layer for Legion Hutta.
+     3→
+     4→A "sandbox" is the place where kernel code actually runs. The kernel
+     5→class orchestrates the protocol (request/response, status, interrupts);
+     6→the sandbox carries out the execution.
+     7→
+     8→This lets us plug in multiple execution backends behind a single
+     9→kernel contract:
+    10→
+    11→  - LocalSubprocessSandbox : runs `python -u` as a child process (default)
+    12→  - E2BSandbox             : runs code in an E2B cloud sandbox
+    13→  - DaytonaSandbox         : runs code in a Daytona cloud dev env
+    14→  - MockCloudSandbox       : simulates a cloud sandbox locally (no creds needed)
+    15→
+    16→Backends that require credentials degrade gracefully: if the relevant
+    17→SDK / API key is not configured, the sandbox reports `available=False`
+    18→and the kernel manager will refuse to start kernels on it, returning
+    19→a helpful error message instead of crashing.
+    20→
+    21→To add a new sandbox backend:
+    22→  1. Subclass `BaseSandbox` and implement the abstract methods.
+    23→  2. Register it in `SANDBOX_REGISTRY` at the bottom of this file.
+    24→  3. The kernel manager + API layer will pick it up automatically.
+    25→"""
+    26→from __future__ import annotations
+    27→
+    28→import abc
+    29→import asyncio
+    30→import importlib
+    31→import json
+    32→import logging
+    33→import os
+    34→import textwrap
+    35→import time
+    36→import uuid
+    37→from dataclasses import dataclass, field
+    38→from typing import Any, AsyncIterator, Optional
+    39→
+    40→logger = logging.getLogger("legion-hutta.sandbox")
+    41→
+    42→
+    43→@dataclass
+    44→class SandboxSpec:
+    45→    """Static description of a sandbox backend."""
+    46→
+    47→    name: str
+    48→    display_name: str
+    49→    description: str
+    50→    icon: str = "cpu"
+    51→    requires_api_key: bool = False
+    52→    api_key_env_var: Optional[str] = None
+    53→    docs_url: Optional[str] = None
+    54→
+    55→
+    56→@dataclass
+    57→class ExecutionRequest:
+    58→    code: str
+    59→    execution_count: int
+    60→    timeout: float = 120.0
+    61→
+    62→
+    63→@dataclass
+    64→class ExecutionEvent:
+    65→    """A single event emitted during execution.
+    66→
+    67→    Mirrors the kernel `OutputChunk` shape so kernels can forward
+    68→    sandbox events verbatim.
+    69→    """
+    70→
+    71→    type: str  # "stdout" | "stderr" | "result" | "error" | "status"
+    72→    text: str = ""
+    73→    data: dict[str, Any] = field(default_factory=dict)
+    74→
+    75→
+    76→class BaseSandbox(abc.ABC):
+    77→    """Abstract sandbox contract.
+    78→
+    79→    A sandbox instance is bound to a single kernel and owns the
+    80→    execution context (process, cloud sandbox ID, etc.). Sandboxes
+    81→    are NOT shared across kernels.
+    82→    """
+    83→
+    84→    def __init__(self, sandbox_id: Optional[str] = None):
+    85→        self.sandbox_id: str = sandbox_id or str(uuid.uuid4())
+    86→        self.created_at: float = time.time()
+    87→
+    88→    @staticmethod
+    89→    @abc.abstractmethod
+    90→    def spec() -> SandboxSpec:
+    91→        """Static spec describing this backend."""
+    92→
+    93→    @abc.abstractmethod
+    94→    async def is_available(self) -> tuple[bool, str]:
+    95→        """Return (available, reason). If not available, reason explains why."""
+    96→
+    97→    @abc.abstractmethod
+    98→    async def start(self) -> None:
+    99→        """Initialize the sandbox (spawn process, create cloud sandbox, etc.)."""
+   100→
+   101→    @abc.abstractmethod
+   102→    async def execute(self, req: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+   103→        """Execute `req.code` and yield events as they arrive."""
+   104→
+   105→    @abc.abstractmethod
+   106→    async def interrupt(self) -> None:
+   107→        """Interrupt the current execution."""
+   108→
+   109→    @abc.abstractmethod
+   110→    async def restart(self) -> None:
+   111→        """Restart the sandbox, clearing all state."""
+   112→
+   113→    @abc.abstractmethod
+   114→    async def shutdown(self) -> None:
+   115→        """Tear down the sandbox and release all resources."""
+   116→
+   117→    @abc.abstractmethod
+   118→    async def introspect(self) -> dict[str, Any]:
+   119→        """Return a dict of variables in the sandbox's global scope.
+   120→
+   121→        Format: {"variables": [{"name","type","repr","size"}, ...]}
+   122→        """
+   123→
+   124→    def to_dict(self) -> dict[str, Any]:
+   125→        return {
+   126→            "sandbox_id": self.sandbox_id,
+   127→            "spec": {
+   128→                "name": self.spec().name,
+   129→                "display_name": self.spec().display_name,
+   130→                "description": self.spec().description,
+   131→                "icon": self.spec().icon,
+   132→                "requires_api_key": self.spec().requires_api_key,
+   133→                "api_key_env_var": self.spec().api_key_env_var,
+   134→                "docs_url": self.spec().docs_url,
+   135→            },
+   136→            "created_at": self.created_at,
+   137→        }
+   138→
+   139→
+   140→# ---- Local subprocess backend (default) ----
+   141→
+   142→
+   143→_REPL_SCRIPT = textwrap.dedent(
+   144→    """
+   145→    import json
+   146→    import sys
+   147→    import traceback
+   148→    import signal
+   149→    import io
+   150→    import contextlib
+   151→
+   152→    _EXEC_COUNT = 0
+   153→    _USER_GLOBALS = {"__name__": "__main__"}
+   154→
+   155→    def _emit(obj):
+   156→        sys.stdout.write("__LEGION_HUTTA_MSG__")
+   157→        sys.stdout.write(json.dumps(obj))
+   158→        sys.stdout.write("__LEGION_HUTTA_END__\\n")
+   159→        sys.stdout.flush()
+   160→
+   161→    def _handle_sigint(signum, frame):
+   162→        _emit({"type": "status", "text": "interrupted"})
+   163→        raise KeyboardInterrupt
+   164→
+   165→    signal.signal(signal.SIGINT, _handle_sigint)
+   166→    _emit({"type": "status", "text": "idle"})
+   167→
+   168→    while True:
+   169→        line = sys.stdin.readline()
+   170→        if not line:
+   171→            break
+   172→        try:
+   173→            req = json.loads(line)
+   174→        except Exception as e:
+   175→            _emit({"type": "error", "text": "bad request", "data": {"value": str(e)}})
+   176→            continue
+   177→
+   178→        kind = req.get("kind")
+   179→        if kind == "shutdown":
+   180→            break
+   181→
+   182→        if kind == "introspect":
+   183→            import types as _types
+   184→            variables = []
+   185→            for name, val in _USER_GLOBALS.items():
+   186→                if name.startswith("__"):
+   187→                    continue
+   188→                if isinstance(val, _types.ModuleType):
+   189→                    continue
+   190→                try:
+   191→                    repr_str = repr(val)[:200]
+   192→                except Exception as rerr:
+   193→                    repr_str = f"<repr error: {rerr}>"
+   194→                try:
+   195→                    size = sys.getsizeof(val)
+   196→                except Exception:
+   197→                    size = 0
+   198→                variables.append({
+   199→                    "name": name,
+   200→                    "type": type(val).__name__,
+   201→                    "repr": repr_str,
+   202→                    "size": size,
+   203→                })
+   204→            _emit({"type": "result", "text": json.dumps({"variables": variables})})
+   205→            _emit({"type": "status", "text": "idle", "data": {"ok": True}})
+   206→            continue
+   207→
+   208→        if kind != "execute":
+   209→            _emit({"type": "error", "text": "unknown kind", "data": {"value": kind}})
+   210→            continue
+   211→
+   212→        code = req.get("code", "")
+   213→        _EXEC_COUNT += 1
+   214→        _emit({"type": "status", "text": "busy", "data": {"execution_count": _EXEC_COUNT}})
+   215→
+   216→        stdout_buf = io.StringIO()
+   217→        stderr_buf = io.StringIO()
+   218→        error = None
+   219→
+   220→        try:
+   221→            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+   222→                try:
+   223→                    compiled = compile(code, "<legion-hutta>", "single")
+   224→                except SyntaxError:
+   225→                    compiled = compile(code, "<legion-hutta>", "exec")
+   226→                exec(compiled, _USER_GLOBALS)
+   227→        except KeyboardInterrupt:
+   228→            error = {
+   229→                "name": "KeyboardInterrupt",
+   230→                "value": "Execution interrupted by user",
+   231→                "traceback": traceback.format_exception_only(KeyboardInterrupt, KeyboardInterrupt()),
+   232→            }
+   233→        except BaseException as exc:
+   234→            tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+   235→            error = {
+   236→                "name": type(exc).__name__,
+   237→                "value": str(exc),
+   238→                "traceback": tb_lines,
+   239→            }
+   240→
+   241→        stdout_text = stdout_buf.getvalue()
+   242→        stderr_text = stderr_buf.getvalue()
+   243→        if stdout_text:
+   244→            _emit({"type": "stdout", "text": stdout_text})
+   245→        if stderr_text:
+   246→            _emit({"type": "stderr", "text": stderr_text})
+   247→        if error:
+   248→            _emit({"type": "error", "text": error["value"], "data": {
+   249→                "name": error["name"],
+   250→                "traceback": error["traceback"],
+   251→            }})
+   252→        _emit({"type": "status", "text": "idle", "data": {"execution_count": _EXEC_COUNT, "ok": error is None}})
+   253→    """
+   254→).strip()
+   255→
+   256→
+   257→MSG_START = "__LEGION_HUTTA_MSG__"
+   258→MSG_END = "__LEGION_HUTTA_END__"
+   259→
+   260→
+   261→class LocalSubprocessSandbox(BaseSandbox):
+   262→    """Default sandbox: a long-lived `python -u` child process."""
+   263→
+   264→    def __init__(self, python_executable: Optional[str] = None):
+   265→        super().__init__()
+   266→        self._python_executable = python_executable or __import__("sys").executable
+   267→        self._proc: Optional[asyncio.subprocess.Process] = None
+   268→        self._exec_lock = asyncio.Lock()
+   269→
+   270→    @staticmethod
+   271→    def spec() -> SandboxSpec:
+   272→        return SandboxSpec(
+   273→            name="local",
+   274→            display_name="Local subprocess",
+   275→            description="Runs Python as a long-lived child process on this machine. No setup required.",
+   276→            icon="cpu",
+   277→            requires_api_key=False,
+   278→        )
+   279→
+   280→    async def is_available(self) -> tuple[bool, str]:
+   281→        return True, "ok"
+   282→
+   283→    async def start(self) -> None:
+   284→        if self._proc and self._proc.returncode is None:
+   285→            return
+   286→        self._proc = await asyncio.create_subprocess_exec(
+   287→            self._python_executable,
+   288→            "-u",
+   289→            "-c",
+   290→            _REPL_SCRIPT,
+   291→            stdin=asyncio.subprocess.PIPE,
+   292→            stdout=asyncio.subprocess.PIPE,
+   293→            stderr=asyncio.subprocess.PIPE,
+   294→            env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+   295→        )
+   296→        # Wait for the initial "idle" status
+   297→        async for _ in self._drain_until_status(expected="idle", timeout=10.0):
+   298→            pass
+   299→
+   300→    async def _drain_until_status(
+   301→        self, expected: Optional[str] = None, timeout: float = 30.0
+   302→    ) -> AsyncIterator[ExecutionEvent]:
+   303→        assert self._proc and self._proc.stdout
+   304→        deadline = time.monotonic() + timeout
+   305→        while True:
+   306→            if time.monotonic() > deadline:
+   307→                yield ExecutionEvent(type="error", text="sandbox did not respond in time")
+   308→                return
+   309→            try:
+   310→                line = await asyncio.wait_for(
+   311→                    self._proc.stdout.readline(),
+   312→                    timeout=max(0.1, deadline - time.monotonic()),
+   313→                )
+   314→            except asyncio.TimeoutError:
+   315→                continue
+   316→            if not line:
+   317→                yield ExecutionEvent(type="status", text="dead")
+   318→                return
+   319→            text = line.decode("utf-8", errors="replace")
+   320→            if MSG_START not in text:
+   321→                yield ExecutionEvent(type="stdout", text=text)
+   322→                continue
+   323→            try:
+   324→                start = text.index(MSG_START) + len(MSG_START)
+   325→                end = text.index(MSG_END, start)
+   326→                payload = json.loads(text[start:end])
+   327→            except (ValueError, json.JSONDecodeError):
+   328→                continue
+   329→            yield ExecutionEvent(
+   330→                type=payload.get("type", "stdout"),
+   331→                text=payload.get("text", ""),
+   332→                data=payload.get("data", {}) or {},
+   333→            )
+   334→            if payload.get("type") == "status":
+   335→                if expected is None or payload.get("text") == expected:
+   336→                    return
+   337→
+   338→    async def execute(self, req: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+   339→        if not self._proc or self._proc.returncode is not None:
+   340→            yield ExecutionEvent(type="error", text="sandbox is not running")
+   341→            return
+   342→        async with self._exec_lock:
+   343→            assert self._proc.stdin
+   344→            try:
+   345→                self._proc.stdin.write(
+   346→                    (json.dumps({"kind": "execute", "code": req.code}) + "\n").encode()
+   347→                )
+   348→                await self._proc.stdin.drain()
+   349→            except (BrokenPipeError, ConnectionResetError):
+   350→                yield ExecutionEvent(type="error", text="sandbox process exited unexpectedly")
+   351→                return
+   352→
+   353→            async for ev in self._drain_until_status(expected="idle", timeout=req.timeout):
+   354→                yield ev
+   355→
+   356→    async def interrupt(self) -> None:
+   357→        if self._proc and self._proc.returncode is None:
+   358→            try:
+   359→                import signal as _sig
+   360→                self._proc.send_signal(_sig.SIGINT)
+   361→            except ProcessLookupError:
+   362→                pass
+   363→
+   364→    async def restart(self) -> None:
+   365→        await self.shutdown()
+   366→        await self.start()
+   367→
+   368→    async def shutdown(self) -> None:
+   369→        if self._proc:
+   370→            try:
+   371→                if self._proc.stdin and self._proc.returncode is None:
+   372→                    try:
+   373→                        self._proc.stdin.write((json.dumps({"kind": "shutdown"}) + "\n").encode())
+   374→                        await self._proc.stdin.drain()
+   375→                    except (BrokenPipeError, ConnectionResetError):
+   376→                        pass
+   377→                try:
+   378→                    await asyncio.wait_for(self._proc.wait(), timeout=2.0)
+   379→                except asyncio.TimeoutError:
+   380→                    self._proc.kill()
+   381→                    await self._proc.wait()
+   382→            finally:
+   383→                self._proc = None
+   384→
+   385→    async def introspect(self) -> dict[str, Any]:
+   386→        if not self._proc or self._proc.returncode is not None:
+   387→            return {"variables": []}
+   388→        assert self._proc.stdin
+   389→        try:
+   390→            self._proc.stdin.write((json.dumps({"kind": "introspect"}) + "\n").encode())
+   391→            await self._proc.stdin.drain()
+   392→        except (BrokenPipeError, ConnectionResetError):
+   393→            return {"variables": []}
+   394→        async for ev in self._drain_until_status(expected="idle", timeout=10.0):
+   395→            if ev.type == "result":
+   396→                try:
+   397→                    return json.loads(ev.text)
+   398→                except json.JSONDecodeError:
+   399→                    return {"variables": []}
+   400→        return {"variables": []}
+   401→
+   402→
+   403→# ---- E2B backend (cloud sandbox) ----
+   404→
+   405→
+   406→class E2BSandbox(BaseSandbox):
+   407→    """E2B cloud sandbox backend.
+   408→
+   409→    Uses the `e2b-code-interpreter` Python SDK to run code in an
+   410→    isolated cloud sandbox. State persists across executions within
+   411→    a single sandbox instance, matching our kernel contract.
+   412→
+   413→    Requires `E2B_API_KEY` in the environment. If the SDK or key is
+   414→    missing, `is_available()` returns False.
+   415→    """
+   416→
+   417→    def __init__(self, api_key: Optional[str] = None):
+   418→        super().__init__()
+   419→        self._api_key = api_key or os.environ.get("E2B_API_KEY")
+   420→        self._sandbox: Any = None
+   421→        self._exec_lock = asyncio.Lock()
+   422→
+   423→    @staticmethod
+   424→    def spec() -> SandboxSpec:
+   425→        return SandboxSpec(
+   426→            name="e2b",
+   427→            display_name="E2B Cloud Sandbox",
+   428→            description="Run code in an isolated E2B cloud sandbox. Requires E2B_API_KEY.",
+   429→            icon="cloud",
+   430→            requires_api_key=True,
+   431→            api_key_env_var="E2B_API_KEY",
+   432→            docs_url="https://e2b.dev/docs",
+   433→        )
+   434→
+   435→    async def is_available(self) -> tuple[bool, str]:
+   436→        if not self._api_key:
+   437→            return False, "E2B_API_KEY is not set"
+   438→        try:
+   439→            importlib.import_module("e2b_code_interpreter")
+   440→            return True, "ok"
+   441→        except ImportError:
+   442→            return False, "e2b-code-interpreter package is not installed (pip install e2b-code-interpreter)"
+   443→
+   444→    async def start(self) -> None:
+   445→        available, reason = await self.is_available()
+   446→        if not available:
+   447→            raise RuntimeError(f"E2B sandbox unavailable: {reason}")
+   448→        from e2b_code_interpreter import AsyncSandbox  # type: ignore
+   449→
+   450→        self._sandbox = await AsyncSandbox.create(api_key=self._api_key)
+   451→
+   452→    async def execute(self, req: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+   453→        if not self._sandbox:
+   454→            yield ExecutionEvent(type="error", text="E2B sandbox is not started")
+   455→            return
+   456→        async with self._exec_lock:
+   457→            yield ExecutionEvent(
+   458→                type="status",
+   459→                text="busy",
+   460→                data={"execution_count": req.execution_count, "sandbox": "e2b"},
+   461→            )
+   462→            try:
+   463→                execution = await self._sandbox.run_code(req.code, timeout=req.timeout)
+   464→            except asyncio.CancelledError:
+   465→                yield ExecutionEvent(type="status", text="interrupted")
+   466→                yield ExecutionEvent(type="status", text="idle", data={"ok": False})
+   467→                return
+   468→            except Exception as exc:  # noqa: BLE001
+   469→                yield ExecutionEvent(
+   470→                    type="error",
+   471→                    text=str(exc),
+   472→                    data={"name": type(exc).__name__, "traceback": [str(exc)]},
+   473→                )
+   474→                yield ExecutionEvent(type="status", text="idle", data={"ok": False})
+   475→                return
+   476→
+   477→            for line in getattr(execution.logs, "stdout", []) or []:
+   478→                yield ExecutionEvent(type="stdout", text=line)
+   479→            for line in getattr(execution.logs, "stderr", []) or []:
+   480→                yield ExecutionEvent(type="stderr", text=line)
+   481→            for r in getattr(execution, "results", []) or []:
+   482→                data: dict[str, Any] = {}
+   483→                if getattr(r, "png", None):
+   484→                    data["image/png"] = r.png
+   485→                if getattr(r, "html", None):
+   486→                    data["text/html"] = r.html
+   487→                if getattr(r, "json", None) is not None:
+   488→                    data["application/json"] = r.json
+   489→                if getattr(r, "latex", None):
+   490→                    data["text/latex"] = r.latex
+   491→                yield ExecutionEvent(
+   492→                    type="result",
+   493→                    text=getattr(r, "text", "") or "",
+   494→                    data=data,
+   495→                )
+   496→            err = getattr(execution, "error", None)
+   497→            if err:
+   498→                yield ExecutionEvent(
+   499→                    type="error",
+   500→                    text=getattr(err, "value", str(err)),
+   501→                    data={
+   502→                        "name": getattr(err, "ename", "Error"),
+   503→                        "traceback": getattr(err, "traceback", []) or [],
+   504→                    },
+   505→                )
+   506→            yield ExecutionEvent(
+   507→                type="status",
+   508→                text="idle",
+   509→                data={"execution_count": req.execution_count, "ok": err is None},
+   510→            )
+   511→
+   512→    async def interrupt(self) -> None:
+   513→        # E2B doesn't expose a clean interrupt; future iteration could
+   514→        # use per-call timeouts more aggressively.
+   515→        pass
+   516→
+   517→    async def restart(self) -> None:
+   518→        await self.shutdown()
+   519→        await self.start()
+   520→
+   521→    async def shutdown(self) -> None:
+   522→        if self._sandbox:
+   523→            try:
+   524→                await self._sandbox.kill()
+   525→            except Exception:  # noqa: BLE001
+   526→                pass
+   527→            self._sandbox = None
+   528→
+   529→    async def introspect(self) -> dict[str, Any]:
+   530→        if not self._sandbox:
+   531→            return {"variables": []}
+   532→        code = (
+   533→            "import json, sys, types as _t\n"
+   534→            "_vs = []\n"
+   535→            "for _n, _v in list(globals().items()):\n"
+   536→            "    if _n.startswith('_') or isinstance(_v, _t.ModuleType):\n"
+   537→            "        continue\n"
+   538→            "    try:\n"
+   539→            "        _r = repr(_v)[:200]\n"
+   540→            "        _s = sys.getsizeof(_v)\n"
+   541→            "    except Exception:\n"
+   542→            "        _r, _s = '<err>', 0\n"
+   543→            "    _vs.append({'name': _n, 'type': type(_v).__name__, 'repr': _r, 'size': _s})\n"
+   544→            "print(json.dumps({'variables': _vs}))\n"
+   545→        )
+   546→        variables: list[dict[str, Any]] = []
+   547→        try:
+   548→            execution = await self._sandbox.run_code(code, timeout=10.0)
+   549→            for line in getattr(execution.logs, "stdout", []) or []:
+   550→                try:
+   551→                    parsed = json.loads(line)
+   552→                    variables.extend(parsed.get("variables", []))
+   553→                except json.JSONDecodeError:
+   554→                    pass
+   555→        except Exception:  # noqa: BLE001
+   556→            pass
+   557→        return {"variables": variables}
+   558→
+   559→
+   560→# ---- Daytona backend (cloud dev environment) ----
+   561→
+   562→
+   563→class DaytonaSandbox(BaseSandbox):
+   564→    """Daytona cloud dev environment backend.
+   565→
+   566→    Uses the `daytona-sdk` Python SDK to spawn an isolated dev
+   567→    environment and run Python code inside it.
+   568→
+   569→    Requires `DAYTONA_API_KEY` and `DAYTONA_SERVER_URL` in the
+   570→    environment. Degrades gracefully when missing.
+   571→    """
+   572→
+   573→    def __init__(self, api_key: Optional[str] = None, server_url: Optional[str] = None):
+   574→        super().__init__()
+   575→        self._api_key = api_key or os.environ.get("DAYTONA_API_KEY")
+   576→        self._server_url = server_url or os.environ.get("DAYTONA_SERVER_URL")
+   577→        self._daytona: Any = None
+   578→        self._sandbox: Any = None
+   579→        self._exec_lock = asyncio.Lock()
+   580→
+   581→    @staticmethod
+   582→    def spec() -> SandboxSpec:
+   583→        return SandboxSpec(
+   584→            name="daytona",
+   585→            display_name="Daytona Cloud Dev Env",
+   586→            description="Run code in an isolated Daytona dev environment. Requires DAYTONA_API_KEY.",
+   587→            icon="server",
+   588→            requires_api_key=True,
+   589→            api_key_env_var="DAYTONA_API_KEY",
+   590→            docs_url="https://www.daytona.io/docs",
+   591→        )
+   592→
+   593→    async def is_available(self) -> tuple[bool, str]:
+   594→        if not self._api_key:
+   595→            return False, "DAYTONA_API_KEY is not set"
+   596→        try:
+   597→            importlib.import_module("daytona_sdk")
+   598→            return True, "ok"
+   599→        except ImportError:
+   600→            return False, "daytona-sdk package is not installed (pip install daytona-sdk)"
+   601→
+   602→    async def start(self) -> None:
+   603→        available, reason = await self.is_available()
+   604→        if not available:
+   605→            raise RuntimeError(f"Daytona sandbox unavailable: {reason}")
+   606→        from daytona_sdk import AsyncDaytona  # type: ignore
+   607→
+   608→        self._daytona = AsyncDaytona(api_key=self._api_key, server_url=self._server_url)
+   609→        self._sandbox = await self._daytona.create()
+   610→
+   611→    async def execute(self, req: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+   612→        if not self._sandbox:
+   613→            yield ExecutionEvent(type="error", text="Daytona sandbox is not started")
+   614→            return
+   615→        async with self._exec_lock:
+   616→            yield ExecutionEvent(
+   617→                type="status",
+   618→                text="busy",
+   619→                data={"execution_count": req.execution_count, "sandbox": "daytona"},
+   620→            )
+   621→            try:
+   622→                result = await self._sandbox.process.exec(
+   623→                    f"python3 -c {json.dumps(req.code)}",
+   624→                    timeout=int(req.timeout),
+   625→                )
+   626→            except Exception as exc:  # noqa: BLE001
+   627→                yield ExecutionEvent(
+   628→                    type="error",
+   629→                    text=str(exc),
+   630→                    data={"name": type(exc).__name__, "traceback": [str(exc)]},
+   631→                )
+   632→                yield ExecutionEvent(type="status", text="idle", data={"ok": False})
+   633→                return
+   634→
+   635→            stdout = getattr(result, "stdout", "") or ""
+   636→            stderr = getattr(result, "stderr", "") or ""
+   637→            exit_code = getattr(result, "exit_code", 0) or 0
+   638→            if stdout:
+   639→                yield ExecutionEvent(type="stdout", text=stdout)
+   640→            if stderr:
+   641→                yield ExecutionEvent(type="stderr", text=stderr)
+   642→            if exit_code != 0:
+   643→                yield ExecutionEvent(
+   644→                    type="error",
+   645→                    text=f"Process exited with code {exit_code}",
+   646→                    data={"name": "NonZeroExit", "traceback": [stderr]},
+   647→                )
+   648→            yield ExecutionEvent(
+   649→                type="status",
+   650→                text="idle",
+   651→                data={"execution_count": req.execution_count, "ok": exit_code == 0},
+   652→            )
+   653→
+   654→    async def interrupt(self) -> None:
+   655→        pass
+   656→
+   657→    async def restart(self) -> None:
+   658→        await self.shutdown()
+   659→        await self.start()
+   660→
+   661→    async def shutdown(self) -> None:
+   662→        if self._sandbox and self._daytona:
+   663→            try:
+   664→                await self._daytona.delete(self._sandbox)
+   665→            except Exception:  # noqa: BLE001
+   666→                pass
+   667→        self._sandbox = None
+   668→        self._daytona = None
+   669→
+   670→    async def introspect(self) -> dict[str, Any]:
+   671→        if not self._sandbox:
+   672→            return {"variables": []}
+   673→        code = (
+   674→            "import json, sys, types as _t\n"
+   675→            "_vs = []\n"
+   676→            "for _n, _v in list(globals().items()):\n"
+   677→            "    if _n.startswith('_') or isinstance(_v, _t.ModuleType):\n"
+   678→            "        continue\n"
+   679→            "    try:\n"
+   680→            "        _r = repr(_v)[:200]\n"
+   681→            "        _s = sys.getsizeof(_v)\n"
+   682→            "    except Exception:\n"
+   683→            "        _r, _s = '<err>', 0\n"
+   684→            "    _vs.append({'name': _n, 'type': type(_v).__name__, 'repr': _r, 'size': _s})\n"
+   685→            "print(json.dumps({'variables': _vs}))\n"
+   686→        )
+   687→        try:
+   688→            result = await self._sandbox.process.exec(f"python3 -c {json.dumps(code)}", timeout=10)
+   689→            stdout = getattr(result, "stdout", "") or ""
+   690→            try:
+   691→                return json.loads(stdout.strip().splitlines()[-1])
+   692→            except (json.JSONDecodeError, IndexError):
+   693→                return {"variables": []}
+   694→        except Exception:  # noqa: BLE001
+   695→            return {"variables": []}
+   696→
+   697→
+   698→# ---- Mock cloud backend (for demos / dev without cloud creds) ----
+   699→
+   700→
+   701→class MockCloudSandbox(BaseSandbox):
+   702→    """Simulated cloud sandbox.
+   703→
+   704→    Executes code locally but tags events as if from a cloud sandbox
+   705→    so the UI can be demoed end-to-end without cloud credentials.
+   706→    """
+   707→
+   708→    def __init__(self) -> None:
+   709→        super().__init__()
+   710→        self._inner = LocalSubprocessSandbox()
+   711→        self._inner.sandbox_id = self.sandbox_id
+   712→
+   713→    @staticmethod
+   714→    def spec() -> SandboxSpec:
+   715→        return SandboxSpec(
+   716→            name="mock-cloud",
+   717→            display_name="Mock Cloud (demo)",
+   718→            description="Simulated cloud sandbox that runs locally. For demos without cloud credentials.",
+   719→            icon="cloud",
+   720→            requires_api_key=False,
+   721→        )
+   722→
+   723→    async def is_available(self) -> tuple[bool, str]:
+   724→        return True, "ok"
+   725→
+   726→    async def start(self) -> None:
+   727→        await self._inner.start()
+   728→
+   729→    async def execute(self, req: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+   730→        yield ExecutionEvent(
+   731→            type="status",
+   732→            text="busy",
+   733→            data={"execution_count": req.execution_count, "sandbox": "mock-cloud"},
+   734→        )
+   735→        async for ev in self._inner.execute(req):
+   736→            yield ev
+   737→
+   738→    async def interrupt(self) -> None:
+   739→        await self._inner.interrupt()
+   740→
+   741→    async def restart(self) -> None:
+   742→        await self._inner.restart()
+   743→
+   744→    async def shutdown(self) -> None:
+   745→        await self._inner.shutdown()
+   746→
+   747→    async def introspect(self) -> dict[str, Any]:
+   748→        return await self._inner.introspect()
+   749→
+   750→
+   751→# ---- Registry ----
+   752→
+   753→
+   754→SANDBOX_REGISTRY: dict[str, type[BaseSandbox]] = {
+   755→    "local": LocalSubprocessSandbox,
+   756→    "mock-cloud": MockCloudSandbox,
+   757→    "e2b": E2BSandbox,
+   758→    "daytona": DaytonaSandbox,
+   759→}
+   760→
+   761→
+   762→async def list_sandbox_specs() -> list[dict[str, Any]]:
+   763→    """Return specs for all registered sandboxes, with live availability."""
+   764→    out: list[dict[str, Any]] = []
+   765→    for name, cls in SANDBOX_REGISTRY.items():
+   766→        spec = cls.spec()
+   767→        try:
+   768→            instance = cls()
+   769→            available, reason = await instance.is_available()
+   770→        except Exception as exc:  # noqa: BLE001
+   771→            available, reason = False, f"init error: {exc}"
+   772→        out.append(
+   773→            {
+   774→                "name": spec.name,
+   775→                "display_name": spec.display_name,
+   776→                "description": spec.description,
+   777→                "icon": spec.icon,
+   778→                "requires_api_key": spec.requires_api_key,
+   779→                "api_key_env_var": spec.api_key_env_var,
+   780→                "docs_url": spec.docs_url,
+   781→                "available": available,
+   782→                "unavailable_reason": reason if not available else None,
+   783→            }
+   784→        )
+   785→    return out
+   786→
+   787→
+   788→__all__ = [
+   789→    "BaseSandbox",
+   790→    "SandboxSpec",
+   791→    "ExecutionRequest",
+   792→    "ExecutionEvent",
+   793→    "LocalSubprocessSandbox",
+   794→    "E2BSandbox",
+   795→    "DaytonaSandbox",
+   796→    "MockCloudSandbox",
+   797→    "SANDBOX_REGISTRY",
+   798→    "list_sandbox_specs",
+   799→]
+   800→

@@ -12,6 +12,13 @@
 
 import { create } from "zustand";
 import { api } from "@/lib/notebook-api";
+import {
+  serializeLegion,
+  parseLegion,
+  ipynbToLegion,
+  LEGION_EXTENSION,
+  type LegionDocument,
+} from "@/lib/legion-format";
 import type {
   CellKind,
   CellModel,
@@ -44,11 +51,11 @@ function makeCell(kind: CellKind = "code", source: string = ""): CellModel {
 const WELCOME_CELLS: CellModel[] = [
   makeCell(
     "markdown",
-    "# Welcome to **Legion Hutta**\n\nA modern, language-agnostic notebook by *Death Legion Team* — better than all notebooks.\n\n## What's new in v0.2\n\n- **Multi-platform sandboxes**: run code locally, in **E2B**, in **Daytona**, or in a **mock cloud** — pick one from the toolbar.\n- **AI Assistant**: open the side panel (Ctrl+/) to chat, explain cells, fix errors, or generate new cells.\n- **`%%ai` magic**: prepend `%%ai` to any cell to ask the LLM a question.\n- **Variables inspector**: see live state of your kernel.\n- **Command palette** (Ctrl+P): quick actions at your fingertips.\n- **Notebook persistence**: save and load notebooks from disk.\n- **Public API**: programmable by AI agents via API key (`/api/v1/*`).\n\nRun the cells below to verify your kernel is alive.",
+    "# Welcome to **Legion Hutta**\n\nA modern, language-agnostic notebook by *Death Legion Team* — better than all notebooks.\n\n## What's new in v0.3\n\n- **Native `.legion` file format**: save and load notebooks in Legion's own format (with sandbox + AI history). Import and export `.ipynb` for Jupyter compatibility.\n- **Multi-platform sandboxes**: run code locally, in **E2B**, or in **Daytona** — pick one from the toolbar.\n- **AI Assistant**: open the side panel (Ctrl+/) to chat, explain cells, fix errors, or generate new cells.\n- **`%%ai` magic**: prepend `%%ai` to any cell to ask the LLM a question.\n- **Variables inspector**: see live state of your kernel.\n- **Command palette** (Ctrl+P): quick actions at your fingertips.\n- **Notebook persistence**: save and load notebooks to the local DB.\n- **Public API**: programmable by AI agents via API key (`/api/v1/*`).\n\nRun the cells below to verify your kernel is alive.",
   ),
   makeCell(
     "code",
-    'import sys\nprint("Legion Hutta v0.2.0")\nprint(f"Python {sys.version.split()[0]} on {sys.platform}")\nprint("Death Legion Team \u2014 better than all notebooks")\n\n# State persists across cells:\nx = 6\ny = 7\n',
+    'import sys\nprint("Legion Hutta v0.3.0")\nprint(f"Python {sys.version.split()[0]} on {sys.platform}")\nprint("Death Legion Team \u2014 better than all notebooks")\n\n# State persists across cells:\nx = 6\ny = 7\n',
   ),
   makeCell(
     "code",
@@ -56,7 +63,7 @@ const WELCOME_CELLS: CellModel[] = [
   ),
   makeCell(
     "markdown",
-    "## Try the AI assistant\n\nPress **Ctrl+/** to open the AI side panel, or create a new cell starting with `%%ai`:\n\n```\n%%ai\nWrite a Python one-liner that returns the first 10 Fibonacci numbers.\n```\n",
+    "## Try the AI assistant\n\nPress **Ctrl+/** to open the AI side panel, or create a new cell starting with `%%ai`:\n\n```\n%%ai\nWrite a Python one-liner that returns the first 10 Fibonacci numbers.\n```\n\n## Save your work\n\nUse the **Export** button in the toolbar to download this notebook as a `.legion` file (or `.ipynb` for Jupyter). The **Import** button opens any `.legion` or `.ipynb` file from disk.\n",
   ),
 ];
 
@@ -142,6 +149,14 @@ interface NotebookStore extends NotebookState {
   currentNotebookId: string | null;
   isSaving: boolean;
 
+  // .legion / .ipynb file import + export
+  exportLegion: () => void;
+  exportIpynb: () => void;
+  importFromFile: () => Promise<void>;
+  importFromLegionJson: (json: string) => void;
+  importFromIpynbJson: (json: string) => void;
+  applyLegionDocument: (doc: LegionDocument) => Promise<void>;
+
   // command palette
   commandPaletteOpen: boolean;
   toggleCommandPalette: (open?: boolean) => void;
@@ -173,7 +188,7 @@ interface NotebookStore extends NotebookState {
 
 export const useNotebookStore = create<NotebookStore>((set, get) => ({
   id: newId(),
-  title: "legion-hutta.ipynb",
+  title: "legion-hutta.legion",
   cells: WELCOME_CELLS,
   kernelId: null,
   kernelStatus: null,
@@ -521,14 +536,156 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   newNotebook: async () => {
     set({
       currentNotebookId: null,
-      title: "untitled.ipynb",
+      title: "untitled.legion",
       cells: [makeCell("code", "")],
       activeCellId: null,
       notebooksPanelOpen: false,
-      outputs: [],
       variables: [],
+      aiMessages: [],
     });
     if (!get().kernelId) {
+      await get().startKernel();
+    }
+  },
+
+  exportLegion: () => {
+    const state = get();
+    const doc = serializeLegion({
+      title: state.title,
+      cells: state.cells,
+      kernelSpec: state.kernelSpec,
+      sandbox: state.selectedSandbox,
+      aiMessages: state.aiMessages,
+    });
+    const blob = new Blob([JSON.stringify(doc, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const name = state.title || "notebook";
+    a.download = name.endsWith(LEGION_EXTENSION)
+      ? name
+      : `${name.replace(/\.(legion|ipynb)$/, "")}${LEGION_EXTENSION}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  exportIpynb: () => {
+    const state = get();
+    const doc = serializeLegion({
+      title: state.title,
+      cells: state.cells,
+      kernelSpec: state.kernelSpec,
+      sandbox: state.selectedSandbox,
+      aiMessages: state.aiMessages,
+    });
+    // Inline .ipynb conversion (avoids extra imports in components).
+    // We re-import here to keep the store as the single entry point.
+    import("@/lib/legion-format").then(({ legionToIpynb }) => {
+      const ipynb = legionToIpynb(doc);
+      const blob = new Blob([JSON.stringify(ipynb, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const name = state.title || "notebook";
+      a.download = name.endsWith(".ipynb")
+        ? name
+        : `${name.replace(/\.(legion|ipynb)$/, "")}.ipynb`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  },
+
+  importFromFile: async () => {
+    const { pickAndLoadNotebookFile } = await import("@/lib/legion-format");
+    let doc: LegionDocument | null;
+    try {
+      doc = await pickAndLoadNotebookFile();
+    } catch (err) {
+      set({
+        error:
+          err instanceof Error
+            ? `Import failed: ${err.message}`
+            : "Import failed",
+      });
+      return;
+    }
+    if (!doc) return; // user cancelled
+    get().applyLegionDocument(doc);
+  },
+
+  importFromLegionJson: (json: string) => {
+    let doc: LegionDocument;
+    try {
+      doc = parseLegion(json);
+    } catch (err) {
+      set({
+        error:
+          err instanceof Error
+            ? `Invalid .legion file: ${err.message}`
+            : "Invalid .legion file",
+      });
+      return;
+    }
+    get().applyLegionDocument(doc);
+  },
+
+  importFromIpynbJson: (json: string) => {
+    let doc: LegionDocument;
+    try {
+      doc = ipynbToLegion(json);
+    } catch (err) {
+      set({
+        error:
+          err instanceof Error
+            ? `Invalid .ipynb file: ${err.message}`
+            : "Invalid .ipynb file",
+      });
+      return;
+    }
+    get().applyLegionDocument(doc);
+  },
+
+  applyLegionDocument: async (doc) => {
+    // Re-id cells so React keys are stable and never collide with old state.
+    const cells: CellModel[] = doc.cells.map((c) => ({
+      id: newId(),
+      kind: c.kind,
+      source: c.source,
+      outputs: c.outputs,
+      executionCount: c.execution_count,
+      isRunning: false,
+      hasError: c.outputs.some((o) => o.type === "error"),
+      errorSummary: null,
+    }));
+    const title = doc.metadata.title || "untitled.legion";
+    set({
+      currentNotebookId: null,
+      title,
+      cells,
+      activeCellId: cells[0]?.id ?? null,
+      aiMessages: (doc.ai_history ?? []).map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+      })),
+      // Outputs are stale relative to any live kernel — reset kernel state.
+      kernelId: null,
+      kernelStatus: null,
+      variables: [],
+      error: null,
+    });
+    // Start a fresh kernel matching the document's sandbox + kernel spec
+    // (best-effort — fall back to defaults if missing).
+    const sandboxName = doc.metadata.sandbox ?? get().selectedSandbox;
+    const kernelName = doc.metadata.kernel?.name ?? undefined;
+    try {
+      await get().startKernel(kernelName, sandboxName);
+    } catch {
+      // Fall back to default kernel if the doc's spec isn't available.
       await get().startKernel();
     }
   },

@@ -27,6 +27,10 @@ Public API v1 (for agentic AIs — requires X-Legion-Key header):
   - POST   /api/v1/kernels/{id}/execute/stream
   - GET    /api/v1/kernels/{id}/variables
   - POST   /api/v1/ai/chat                streaming chat completion
+  - GET    /api/v1/format/spec            .legion format specification
+  - POST   /api/v1/format/legion          validate + normalize a .legion document
+  - POST   /api/v1/format/legion/to-ipynb convert .legion -> nbformat 4 (.ipynb)
+  - POST   /api/v1/format/ipynb/to-legion convert nbformat 4 (.ipynb) -> .legion
 
 The v1 API mirrors the internal API but is designed for programmatic
 access. Auth is via a static API key set in the LEGION_HUTTA_API_KEY
@@ -60,7 +64,7 @@ logging.basicConfig(
 
 class CreateKernelRequest(BaseModel):
     name: str = Field(default="python3")
-    sandbox: str = Field(default="local", description="Sandbox backend: local, mock-cloud, e2b, daytona")
+    sandbox: str = Field(default="local", description="Sandbox backend: local, e2b, daytona")
 
 
 class ExecuteRequest(BaseModel):
@@ -453,6 +457,305 @@ async def v1_ai_chat(req: AiChatRequest, _: str = Depends(require_api_key)) -> d
 
     result = await asyncio.to_thread(_do)
     return result
+
+
+# ---- Public API v1 — .legion format utilities ----
+#
+# These endpoints let agentic AIs serialize / deserialize notebooks in
+# Legion's native .legion format, and convert to/from nbformat 4 (.ipynb).
+# All round-trip through the same schema used by the frontend, so an AI
+# agent can build a notebook, POST it to /api/v1/format/legion to validate
+# and pretty-print, then execute it on a kernel.
+
+LEGION_FORMAT = "legion"
+LEGION_FORMAT_VERSION = 1
+LEGION_APP_VERSION = "0.3.0"
+
+
+class LegionCellInput(BaseModel):
+    id: Optional[str] = None
+    kind: str = Field(default="code", pattern="^(code|markdown)$")
+    source: str = ""
+    execution_count: Optional[int] = None
+    outputs: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LegionMetadataInput(BaseModel):
+    title: str = "untitled.legion"
+    kernel: Optional[dict[str, Any]] = None
+    sandbox: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    legion_version: Optional[str] = None
+    extensions: dict[str, Any] = Field(default_factory=dict)
+
+
+class LegionDocumentInput(BaseModel):
+    """Input shape for /api/v1/format/legion endpoints.
+
+    Accepts either a full Legion document or a minimal subset; missing
+    fields are filled with defaults. `format` and `format_version` are
+    always normalized on output.
+    """
+    format: Optional[str] = None
+    format_version: Optional[int] = None
+    metadata: LegionMetadataInput = Field(default_factory=LegionMetadataInput)
+    cells: list[LegionCellInput] = Field(default_factory=list)
+    ai_history: Optional[list[dict[str, Any]]] = None
+
+
+def _normalize_legion_doc(doc: LegionDocumentInput) -> dict[str, Any]:
+    """Normalize input into a valid Legion document (v1)."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    cells_out = []
+    for i, c in enumerate(doc.cells):
+        cells_out.append({
+            "id": c.id or f"cell-{i}",
+            "kind": c.kind,
+            "source": c.source,
+            "execution_count": c.execution_count,
+            "outputs": c.outputs or [],
+        })
+    return {
+        "format": LEGION_FORMAT,
+        "format_version": LEGION_FORMAT_VERSION,
+        "metadata": {
+            "title": doc.metadata.title or "untitled.legion",
+            "kernel": doc.metadata.kernel,
+            "sandbox": doc.metadata.sandbox or "local",
+            "created_at": doc.metadata.created_at or now,
+            "updated_at": now,
+            "legion_version": doc.metadata.legion_version or LEGION_APP_VERSION,
+            "extensions": doc.metadata.extensions or {},
+        },
+        "cells": cells_out,
+        **({"ai_history": doc.ai_history} if doc.ai_history else {}),
+    }
+
+
+@app.post("/api/v1/format/legion")
+async def v1_format_legion(
+    doc: LegionDocumentInput,
+    _: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Validate and normalize a .legion document.
+
+    Accepts a partial document, fills in defaults, and returns the
+    canonical v1 representation. Useful for AI agents that want to
+    build a notebook programmatically and validate it before saving.
+    """
+    return _normalize_legion_doc(doc)
+
+
+@app.post("/api/v1/format/legion/to-ipynb")
+async def v1_format_legion_to_ipynb(
+    doc: LegionDocumentInput,
+    _: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Convert a .legion document to nbformat 4 (.ipynb).
+
+    Rich outputs (MIME bundles) are preserved in `data`. AI history is
+    not carried over (no .ipynb equivalent). The original Legion
+    metadata is preserved under `metadata.legion-hutta` for round-trip.
+    """
+    normalized = _normalize_legion_doc(doc)
+    kernel = (normalized["metadata"] or {}).get("kernel") or {}
+    cells_out = []
+    for c in normalized["cells"]:
+        base = {
+            "id": c["id"],
+            "cell_type": c["kind"],
+            "source": c["source"].split("\n"),
+            "metadata": {},
+        }
+        if c["kind"] == "markdown":
+            cells_out.append(base)
+            continue
+        outputs = []
+        for o in c.get("outputs") or []:
+            t = o.get("type")
+            if t == "stdout" or t == "stderr":
+                outputs.append({
+                    "output_type": "stream",
+                    "name": t,
+                    "text": (o.get("text") or "").split("\n"),
+                })
+            elif t == "error":
+                data = o.get("data") or {}
+                outputs.append({
+                    "output_type": "error",
+                    "ename": data.get("name", "Error"),
+                    "evalue": o.get("text", ""),
+                    "traceback": data.get("traceback", []),
+                })
+            elif t == "result":
+                data = o.get("data") or {}
+                outputs.append({
+                    "output_type": "display_data",
+                    "data": data if data else {"text/plain": o.get("text", "")},
+                    "metadata": {},
+                })
+            # status outputs are dropped (protocol-only)
+        cells_out.append({
+            **base,
+            "execution_count": c.get("execution_count"),
+            "outputs": outputs,
+        })
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {
+                "name": kernel.get("name", "python3"),
+                "display_name": kernel.get("display_name", "Python 3"),
+                "language": kernel.get("language", "python"),
+            },
+            "legion-hutta": {
+                "format": LEGION_FORMAT,
+                "format_version": LEGION_FORMAT_VERSION,
+                "sandbox": normalized["metadata"].get("sandbox", "local"),
+                "legion_version": LEGION_APP_VERSION,
+            },
+        },
+        "cells": cells_out,
+    }
+
+
+@app.post("/api/v1/format/ipynb/to-legion")
+async def v1_format_ipynb_to_legion(
+    payload: dict[str, Any],
+    _: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Convert an nbformat 4 (.ipynb) document to .legion.
+
+    Best-effort: anything that doesn't map is dropped. The sandbox is
+    pulled from `metadata.legion-hutta.sandbox` if present, else
+    defaults to "local".
+    """
+    meta = payload.get("metadata") or {}
+    kernel = meta.get("kernelspec") or {}
+    legion_meta = meta.get("legion-hutta") or {}
+    raw_cells = payload.get("cells") or []
+
+    def _join_src(v: Any) -> str:
+        if isinstance(v, list):
+            return "".join(str(x) for x in v)
+        return str(v or "")
+
+    cells_out = []
+    for i, c in enumerate(raw_cells):
+        kind = "markdown" if c.get("cell_type") == "markdown" else "code"
+        outputs = []
+        if kind == "code":
+            for o in c.get("outputs") or []:
+                t = o.get("output_type")
+                if t == "stream":
+                    outputs.append({
+                        "type": o.get("name", "stdout"),
+                        "text": _join_src(o.get("text")),
+                        "data": {},
+                        "timestamp": 0,
+                    })
+                elif t == "error":
+                    outputs.append({
+                        "type": "error",
+                        "text": str(o.get("evalue", "")),
+                        "data": {
+                            "name": o.get("ename", "Error"),
+                            "traceback": o.get("traceback", []),
+                        },
+                        "timestamp": 0,
+                    })
+                elif t in ("display_data", "execute_result"):
+                    data = o.get("data") or {}
+                    text = _join_src(data.get("text/plain", ""))
+                    outputs.append({
+                        "type": "result",
+                        "text": text,
+                        "data": data,
+                        "timestamp": 0,
+                    })
+        cells_out.append({
+            "id": c.get("id") or f"cell-{i}",
+            "kind": kind,
+            "source": _join_src(c.get("source")),
+            "execution_count": c.get("execution_count"),
+            "outputs": outputs,
+        })
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "format": LEGION_FORMAT,
+        "format_version": LEGION_FORMAT_VERSION,
+        "metadata": {
+            "title": "imported.legion",
+            "kernel": {
+                "name": kernel.get("name", "python3"),
+                "display_name": kernel.get("display_name", kernel.get("name", "Python 3")),
+                "language": kernel.get("language", "python"),
+            } if kernel else None,
+            "sandbox": legion_meta.get("sandbox", "local"),
+            "created_at": now,
+            "updated_at": now,
+            "legion_version": LEGION_APP_VERSION,
+            "extensions": {},
+        },
+        "cells": cells_out,
+    }
+
+
+@app.get("/api/v1/format/spec")
+async def v1_format_spec(_: str = Depends(require_api_key)) -> dict[str, Any]:
+    """Return the .legion format specification.
+
+    Useful for AI agents that want to introspect the format before
+    constructing a document.
+    """
+    return {
+        "format": LEGION_FORMAT,
+        "format_version": LEGION_FORMAT_VERSION,
+        "legion_app_version": LEGION_APP_VERSION,
+        "extension": ".legion",
+        "schema": {
+            "format": "string  (literal 'legion')",
+            "format_version": "integer  (currently 1)",
+            "metadata": {
+                "title": "string",
+                "kernel": "object | null  ({name, display_name, language})",
+                "sandbox": "string | null  ('local' | 'e2b' | 'daytona')",
+                "created_at": "ISO 8601 string",
+                "updated_at": "ISO 8601 string",
+                "legion_version": "string",
+                "extensions": "object  (free-form future-proofing)",
+            },
+            "cells": [
+                {
+                    "id": "string",
+                    "kind": "'code' | 'markdown'",
+                    "source": "string",
+                    "execution_count": "integer | null",
+                    "outputs": [
+                        {
+                            "type": "'stdout' | 'stderr' | 'result' | 'error' | 'status'",
+                            "text": "string",
+                            "data": "object  (MIME bundle for 'result', {name, traceback} for 'error')",
+                            "timestamp": "number  (epoch ms)",
+                        }
+                    ],
+                }
+            ],
+            "ai_history": "array  (optional; {id, role, content})",
+        },
+        "endpoints": {
+            "validate": "POST /api/v1/format/legion",
+            "to_ipynb": "POST /api/v1/format/legion/to-ipynb",
+            "from_ipynb": "POST /api/v1/format/ipynb/to-legion",
+            "spec": "GET /api/v1/format/spec",
+        },
+    }
 
 
 @app.exception_handler(Exception)
