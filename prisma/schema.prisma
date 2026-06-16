@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,20 +10,52 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
+// ---- Notebook persistence (Legion Hutta) ----
+
+model Notebook {
   id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  title     String   @default("untitled.ipynb")
+  kernelSpec String? // spec name, e.g. "python3"
+  sandbox   String?  // sandbox name, e.g. "local"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  cells Cell[]
+
+  @@map("notebooks")
 }
 
-model Post {
+model Cell {
+  id         String   @id @default(cuid())
+  notebookId String
+  position   Int
+  kind       String   @default("code") // "code" | "markdown"
+  source     String   @default("")
+  outputs    String   @default("[]")   // JSON-encoded OutputChunk[]
+  executionCount Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  notebook Notebook @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+
+  @@index([notebookId, position])
+  @@map("cells")
+}
+
+// ---- API keys for the public v1 API ----
+// Note: the Python backend gates /api/v1/* using LEGION_HUTTA_API_KEY
+// (an env var). These keys are for the Next.js-brokered API routes
+// that wrap the Python backend — useful for per-user / per-agent
+// revocation in a multi-tenant deployment.
+
+model ApiKey {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  name      String   // human-readable label
+  keyHash   String   @unique // sha256 hash of the secret key
+  prefix    String   // first 8 chars, for display
+  scopes    String   @default("read,execute") // comma-separated
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  lastUsedAt DateTime?
+
+  @@map("api_keys")
 }

@@ -19,6 +19,13 @@ export type OutputType =
   | "error"
   | "status";
 
+/**
+ * MIME-bundle data for rich output. Keys are MIME types
+ * (e.g. "text/html", "image/png", "application/json", "text/markdown",
+ * "text/latex"). The frontend renders the richest type it supports.
+ */
+export type RichData = Record<string, string | object>;
+
 export interface KernelSpec {
   name: string;
   display_name: string;
@@ -33,6 +40,20 @@ export interface KernelspecsResponse {
   kernelspecs: Record<string, KernelSpec>;
 }
 
+export interface SandboxInfo {
+  sandbox_id: string;
+  spec: {
+    name: string;
+    display_name: string;
+    description: string;
+    icon: string;
+    requires_api_key: boolean;
+    api_key_env_var: string | null;
+    docs_url: string | null;
+  };
+  created_at: number;
+}
+
 export interface KernelInfo {
   kernel_id: string;
   status: KernelStatus;
@@ -40,12 +61,13 @@ export interface KernelInfo {
   created_at: number;
   last_activity: number;
   spec: KernelSpec;
+  sandbox: SandboxInfo | null;
 }
 
 export interface OutputChunk {
   type: OutputType;
   text: string;
-  data: Record<string, unknown>;
+  data: RichData;
   timestamp: number;
 }
 

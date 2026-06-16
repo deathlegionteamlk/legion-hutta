@@ -1,143 +1,49 @@
 """
-Python kernel implementation for Legion Hutta.
+Python kernel for Legion Hutta.
 
-Strategy: spawn a long-lived `python -u` subprocess that runs a custom
-REPL loop. The subprocess reads JSON-encoded requests from stdin and
-writes JSON-encoded responses to stdout. This gives us:
+Thin orchestrator that delegates execution to a pluggable sandbox
+(local subprocess, E2B, Daytona, mock cloud). Supports:
 
-- Persistent state across executions (variables, imports, etc.)
-- Clean stdout/stderr separation
-- Structured error reporting (name, value, traceback)
-- Interruptibility via SIGINT to the subprocess
-- Language-agnostic surface: the protocol is JSON, so any future
-  kernel (JS, R, ...) can adopt the same shape.
+  - Persistent state across executions (via the underlying sandbox)
+  - Rich output: stdout, stderr, errors, structured results with
+    MIME bundles (image/png, text/html, application/json, text/latex)
+  - Introspection for the variables inspector
+  - `%%ai` magic: delegates the prompt to an LLM (configured via env)
+  - `%%time` magic: times the execution
+  - `%%capture` magic: suppresses stdout but keeps results
+
+Adding a new magic = handle it in `_strip_magics` and dispatch in
+`execute()`.
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import os
-import signal
-import sys
-import textwrap
 import time
-import uuid
 from typing import AsyncIterator, Optional
 
-from .base import BaseKernel, ExecutionResult, KernelSpec, KernelStatus, OutputChunk, OutputType
-
-# Marker bytes used to delimit structured messages on the kernel's stdout.
-# Picked because they are extremely unlikely to appear in normal program output.
-MSG_START = "__LEGION_HUTTA_MSG__"
-MSG_END = "__LEGION_HUTTA_END__"
-
-# The REPL script that runs inside the subprocess. It is intentionally
-# minimal and dependency-free so we can ship the kernel without any
-# extra Python packages installed in the user's environment.
-REPL_SCRIPT = textwrap.dedent(
-    """
-    import json
-    import sys
-    import traceback
-    import signal
-    import io
-    import contextlib
-
-    _EXEC_COUNT = 0
-    _USER_GLOBALS = {"__name__": "__main__"}
-
-    def _emit(obj):
-        sys.stdout.write("__LEGION_HUTTA_MSG__")
-        sys.stdout.write(json.dumps(obj))
-        sys.stdout.write("__LEGION_HUTTA_END__\\n")
-        sys.stdout.flush()
-
-    def _handle_sigint(signum, frame):
-        _emit({"type": "status", "text": "interrupted"})
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGINT, _handle_sigint)
-
-    _emit({"type": "status", "text": "idle"})
-
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            break
-        try:
-            req = json.loads(line)
-        except Exception as e:
-            _emit({"type": "error", "text": "bad request", "data": {"value": str(e)}})
-            continue
-
-        kind = req.get("kind")
-        if kind == "shutdown":
-            break
-
-        if kind != "execute":
-            _emit({"type": "error", "text": "unknown kind", "data": {"value": kind}})
-            continue
-
-        code = req.get("code", "")
-        _EXEC_COUNT += 1
-        _emit({"type": "status", "text": "busy", "data": {"execution_count": _EXEC_COUNT}})
-
-        stdout_buf = io.StringIO()
-        stderr_buf = io.StringIO()
-        error = None
-        result_repr = None
-
-        # Try to evaluate the last expression if the source is a single
-        # expression; otherwise execute as statements. We compile in
-        # 'single' mode so the REPL-style printing of the last expression
-        # value works naturally.
-        try:
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                try:
-                    compiled = compile(code, "<legion-hutta>", "single")
-                except SyntaxError:
-                    # Not a single expression -> execute as a module
-                    compiled = compile(code, "<legion-hutta>", "exec")
-                exec(compiled, _USER_GLOBALS)
-        except KeyboardInterrupt:
-            error = {
-                "name": "KeyboardInterrupt",
-                "value": "Execution interrupted by user",
-                "traceback": traceback.format_exception_only(KeyboardInterrupt, KeyboardInterrupt()),
-            }
-        except BaseException as exc:  # noqa: BLE001 - we want to report any error
-            tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
-            error = {
-                "name": type(exc).__name__,
-                "value": str(exc),
-                "traceback": tb_lines,
-            }
-
-        stdout_text = stdout_buf.getvalue()
-        stderr_text = stderr_buf.getvalue()
-        if stdout_text:
-            _emit({"type": "stdout", "text": stdout_text})
-        if stderr_text:
-            _emit({"type": "stderr", "text": stderr_text})
-        if error:
-            _emit({"type": "error", "text": error["value"], "data": {
-                "name": error["name"],
-                "traceback": error["traceback"],
-            }})
-        _emit({"type": "status", "text": "idle", "data": {"execution_count": _EXEC_COUNT, "ok": error is None}})
-    """
-).strip()
+from kernels.base import BaseKernel, ExecutionResult, KernelSpec, KernelStatus, OutputChunk, OutputType
+from sandboxes import (
+    BaseSandbox,
+    ExecutionEvent,
+    ExecutionRequest,
+    LocalSubprocessSandbox,
+    SANDBOX_REGISTRY,
+)
 
 
 class PythonKernel(BaseKernel):
-    """A Python kernel backed by a long-lived `python -u` subprocess."""
+    """A Python kernel backed by any sandbox implementation."""
 
-    def __init__(self, kernel_id: Optional[str] = None, python_executable: Optional[str] = None):
-        super().__init__(kernel_id=kernel_id)
-        self._python_executable = python_executable or sys.executable
-        self._proc: Optional[asyncio.subprocess.Process] = None
-        self._stdout_buffer = ""
-        self._execution_lock = asyncio.Lock()
+    def __init__(
+        self,
+        kernel_id: Optional[str] = None,
+        sandbox: Optional[BaseSandbox] = None,
+        sandbox_name: str = "local",
+    ):
+        if sandbox is None:
+            cls = SANDBOX_REGISTRY.get(sandbox_name, LocalSubprocessSandbox)
+            sandbox = cls()
+        super().__init__(kernel_id=kernel_id, sandbox=sandbox)
 
     @staticmethod
     def spec() -> KernelSpec:
@@ -151,149 +57,192 @@ class PythonKernel(BaseKernel):
         )
 
     async def start(self) -> None:
-        if self._proc and self._proc.returncode is None:
-            return
-        self._proc = await asyncio.create_subprocess_exec(
-            self._python_executable,
-            "-u",  # unbuffered stdout/stderr
-            "-c",
-            REPL_SCRIPT,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1"},
-        )
-        # Wait for the initial "idle" status message
-        async for chunk in self._drain_until_status(expected="idle", timeout=10.0):
-            # discard
-            pass
+        await self.sandbox.start()
         self.status = KernelStatus.IDLE
         self._touch()
 
-    async def _drain_until_status(
-        self, expected: Optional[str] = None, timeout: float = 30.0
-    ) -> AsyncIterator[OutputChunk]:
-        """Yield parsed messages from the kernel stdout until a matching status arrives."""
-        assert self._proc and self._proc.stdout
-        deadline = time.monotonic() + timeout
-        while True:
-            if time.monotonic() > deadline:
-                yield OutputChunk(type=OutputType.ERROR, text="kernel did not respond in time")
-                return
-            try:
-                line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=max(0.1, deadline - time.monotonic()))
-            except asyncio.TimeoutError:
-                continue
-            if not line:
-                # process ended
-                self.status = KernelStatus.DEAD
-                yield OutputChunk(type=OutputType.STATUS, text="dead")
-                return
-            text = line.decode("utf-8", errors="replace")
-            if MSG_START not in text:
-                # Not a structured message - emit as raw stdout
-                yield OutputChunk(type=OutputType.STDOUT, text=text)
-                continue
-            # Extract the JSON payload between markers
-            try:
-                start = text.index(MSG_START) + len(MSG_START)
-                end = text.index(MSG_END, start)
-                payload = json.loads(text[start:end])
-            except (ValueError, json.JSONDecodeError):
-                continue
-
-            chunk = OutputChunk(
-                type=OutputType(payload.get("type", "stdout")),
-                text=payload.get("text", ""),
-                data=payload.get("data", {}) or {},
-            )
-            yield chunk
-            if chunk.type == OutputType.STATUS:
-                if expected is None or chunk.text == expected:
-                    return
-
     async def execute(self, code: str) -> AsyncIterator[OutputChunk]:
-        if not self._proc or self._proc.returncode is not None:
+        if not self.sandbox:
             self.status = KernelStatus.DEAD
-            yield OutputChunk(type=OutputType.ERROR, text="kernel is not running")
+            yield OutputChunk(type=OutputType.ERROR, text="no sandbox attached")
             return
 
-        async with self._execution_lock:
-            self.status = KernelStatus.BUSY
-            self._touch()
-            # Send the execute request
-            assert self._proc.stdin
-            try:
-                self._proc.stdin.write((json.dumps({"kind": "execute", "code": code}) + "\n").encode())
-                await self._proc.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError):
-                self.status = KernelStatus.DEAD
-                yield OutputChunk(type=OutputType.ERROR, text="kernel process exited unexpectedly")
-                return
+        # Parse magics
+        magics, body = _strip_magics(code)
+        self._touch()
+        self.status = KernelStatus.BUSY
+        yield OutputChunk(type=OutputType.STATUS, text="busy", data={"execution_count": self.execution_count + 1})
 
-            seen_busy = False
-            async for chunk in self._drain_until_status(expected="idle", timeout=120.0):
-                self._touch()
-                # Track execution_count from the busy status message
-                if chunk.type == OutputType.STATUS:
-                    if chunk.text == "busy" and not seen_busy:
-                        seen_busy = True
-                        ec = chunk.data.get("execution_count")
-                        if isinstance(ec, int):
-                            self.execution_count = ec
-                        self.status = KernelStatus.BUSY
-                        yield chunk
-                        continue
-                    if chunk.text == "idle":
-                        ec = chunk.data.get("execution_count")
-                        if isinstance(ec, int):
-                            self.execution_count = ec
-                        self.status = KernelStatus.IDLE
-                        yield chunk
-                        continue
-                    if chunk.text == "interrupted":
-                        self.status = KernelStatus.INTERRUPTED
-                        yield chunk
-                        continue
-                    # Any other status - pass through
-                    yield chunk
-                    continue
+        # Handle AI magic
+        if "ai" in magics:
+            async for chunk in self._run_ai_magic(body, magics["ai"]):
                 yield chunk
+            self.status = KernelStatus.IDLE
+            self._touch()
+            return
+
+        # Build request
+        started = time.monotonic()
+        self.execution_count += 1
+        req = ExecutionRequest(
+            code=body,
+            execution_count=self.execution_count,
+            timeout=float(magics.get("timeout", 120.0)),
+        )
+
+        # `%%capture` suppresses stdout
+        capture = "capture" in magics
+        success = True
+        async for ev in self.sandbox.execute(req):
+            self._touch()
+            if ev.type == "status":
+                if ev.text == "idle":
+                    if isinstance(ev.data.get("execution_count"), int):
+                        self.execution_count = ev.data["execution_count"]
+                    success = ev.data.get("ok", success)
+                    self.status = KernelStatus.IDLE
+                    yield OutputChunk(
+                        type=OutputType.STATUS,
+                        text="idle",
+                        data={
+                            "execution_count": self.execution_count,
+                            "ok": success,
+                            "duration_ms": (time.monotonic() - started) * 1000,
+                        },
+                    )
+                    return
+                if ev.text == "busy":
+                    continue
+                if ev.text == "interrupted":
+                    self.status = KernelStatus.INTERRUPTED
+                    yield OutputChunk(type=OutputType.STATUS, text="interrupted")
+                    continue
+                # other status — pass through
+                yield OutputChunk(type=OutputType.STATUS, text=ev.text, data=ev.data)
+                continue
+            if ev.type == "stdout" and capture:
+                continue
+            yield OutputChunk(
+                type=OutputType(ev.type),
+                text=ev.text,
+                data=ev.data,
+            )
+
+    async def _run_ai_magic(self, prompt: str, model_hint: str) -> AsyncIterator[OutputChunk]:
+        """Handle `%%ai` magic — call an LLM with the cell source as prompt.
+
+        The LLM is invoked via an HTTP call to the Next.js AI route
+        (so we reuse the same z-ai-web-dev-sdk wiring). Set
+        LEGION_HUTTA_AI_URL to override the default.
+        """
+        url = os.environ.get("LEGION_HUTTA_AI_URL", "http://localhost:3000/api/ai/raw")
+        import json
+        import urllib.request
+
+        self.execution_count += 1
+        yield OutputChunk(
+            type=OutputType.STATUS,
+            text="busy",
+            data={"execution_count": self.execution_count, "sandbox": "ai"},
+        )
+        try:
+            payload = json.dumps({"prompt": prompt, "model": model_hint or None}).encode()
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            # Run blocking HTTP in a thread to stay async-friendly
+            import asyncio
+            def _do() -> str:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    return resp.read().decode("utf-8", errors="replace")
+            raw = await asyncio.to_thread(_do)
+            # Parse the JSON response from /api/ai/raw: {"text": "...", "model": "..."}
+            try:
+                parsed = json.loads(raw)
+                ai_text = parsed.get("text", raw)
+            except (json.JSONDecodeError, AttributeError):
+                ai_text = raw
+            # Emit as a rich result so the frontend renders it as markdown
+            yield OutputChunk(
+                type=OutputType.RESULT,
+                text=ai_text,
+                data={"text/markdown": ai_text, "text/plain": ai_text},
+            )
+            yield OutputChunk(
+                type=OutputType.STATUS,
+                text="idle",
+                data={"execution_count": self.execution_count, "ok": True},
+            )
+        except Exception as exc:  # noqa: BLE001
+            yield OutputChunk(
+                type=OutputType.ERROR,
+                text=str(exc),
+                data={"name": type(exc).__name__, "traceback": [str(exc)]},
+            )
+            yield OutputChunk(
+                type=OutputType.STATUS,
+                text="idle",
+                data={"execution_count": self.execution_count, "ok": False},
+            )
 
     async def interrupt(self) -> None:
-        if self._proc and self._proc.returncode is None:
-            try:
-                self._proc.send_signal(signal.SIGINT)
-            except ProcessLookupError:
-                pass
-            self.status = KernelStatus.INTERRUPTED
-            self._touch()
+        if self.sandbox:
+            await self.sandbox.interrupt()
+        self.status = KernelStatus.INTERRUPTED
+        self._touch()
 
     async def restart(self) -> None:
-        await self.shutdown()
+        if self.sandbox:
+            await self.sandbox.restart()
         self.execution_count = 0
-        self.status = KernelStatus.STARTING
-        await self.start()
+        self.status = KernelStatus.IDLE
+        self._touch()
 
     async def shutdown(self) -> None:
-        if self._proc:
+        if self.sandbox:
             try:
-                if self._proc.stdin and self._proc.returncode is None:
-                    try:
-                        self._proc.stdin.write((json.dumps({"kind": "shutdown"}) + "\n").encode())
-                        await self._proc.stdin.drain()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                try:
-                    await asyncio.wait_for(self._proc.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    self._proc.kill()
-                    await self._proc.wait()
-            finally:
-                self._proc = None
+                await self.sandbox.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
         self.status = KernelStatus.DEAD
         self._touch()
 
 
-# Module-level helper so the kernel manager can discover kernels by name.
 KERNEL_ENTRYPOINT = PythonKernel
+
+
+# ---- Magic parser ----
+
+
+def _strip_magics(code: str) -> tuple[dict[str, str], str]:
+    """Extract `%%magic arg` lines from the top of the cell.
+
+    Returns (magics_dict, body) where magics_dict maps magic name to
+    its argument string (or empty string if no arg). Recognized
+    magics: ai, time, capture, timeout.
+    """
+    magics: dict[str, str] = {}
+    lines = code.split("\n")
+    body_start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            body_start = i + 1
+            continue
+        if stripped.startswith("%%"):
+            magic_line = stripped[2:].strip()
+            parts = magic_line.split(None, 1)
+            if not parts:
+                body_start = i + 1
+                continue
+            name = parts[0]
+            arg = parts[1] if len(parts) > 1 else ""
+            magics[name] = arg
+            body_start = i + 1
+            continue
+        break
+    body = "\n".join(lines[body_start:])
+    return magics, body

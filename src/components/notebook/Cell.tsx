@@ -24,6 +24,8 @@ import {
   Code2,
   FileText,
   CircleDot,
+  Bot,
+  Bug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -54,6 +56,8 @@ export function Cell({ cell, index }: CellProps) {
   const moveCell = useNotebookStore((s) => s.moveCell);
   const setCellKind = useNotebookStore((s) => s.setCellKind);
   const clearCellOutput = useNotebookStore((s) => s.clearCellOutput);
+  const explainCell = useNotebookStore((s) => s.explainCell);
+  const fixCell = useNotebookStore((s) => s.fixCell);
   const runAll = useNotebookStore((s) => s.runAll);
   void runAll; // referenced in keyboard hints only
 
@@ -196,6 +200,33 @@ export function Cell({ cell, index }: CellProps) {
               <Plus className="h-3 w-3" />
             </Button>
           </CellTooltip>
+
+          <div className="mx-0.5 h-4 w-px bg-border/60" />
+
+          {cell.kind === "code" && (
+            <CellTooltip label="Explain with AI">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-violet-600 hover:text-violet-700 dark:text-violet-400"
+                onClick={() => explainCell(cell.id)}
+              >
+                <Bot className="h-3 w-3" />
+              </Button>
+            </CellTooltip>
+          )}
+          {cell.kind === "code" && cell.hasError && (
+            <CellTooltip label="Fix error with AI">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-amber-600 hover:text-amber-700 dark:text-amber-400"
+                onClick={() => fixCell(cell.id)}
+              >
+                <Bug className="h-3 w-3" />
+              </Button>
+            </CellTooltip>
+          )}
 
           <CellTooltip label="Delete cell">
             <Button

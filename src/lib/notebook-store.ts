@@ -2,12 +2,12 @@
  * Notebook store.
  *
  * Holds all frontend notebook state: the cells, the attached kernel,
- * kernel status, and the operations the UI can perform (add/remove
- * cells, run cells, interrupt, restart, etc.).
+ * kernel status, sandbox selection, variables inspector, AI assistant
+ * panel, notebook persistence, and the operations the UI can perform.
  *
- * The store is intentionally framework-agnostic — components subscribe
- * via the standard zustand hooks. All backend interaction goes through
- * the `api` client.
+ * The store is framework-agnostic; components subscribe via the
+ * standard zustand hooks. All backend interaction goes through the
+ * `api` client.
  */
 
 import { create } from "zustand";
@@ -22,7 +22,6 @@ import type {
 } from "@/types/notebook";
 
 function newId(): string {
-  // Avoid pulling in `uuid` for a single call site.
   return (
     Date.now().toString(36) +
     Math.random().toString(36).slice(2, 10)
@@ -45,39 +44,124 @@ function makeCell(kind: CellKind = "code", source: string = ""): CellModel {
 const WELCOME_CELLS: CellModel[] = [
   makeCell(
     "markdown",
-    "# Welcome to **Legion Hutta**\n\nA modern, language-agnostic notebook by *Death Legion Team* — better than all notebooks.\n\nRun the cell below to verify your Python kernel is alive.",
+    "# Welcome to **Legion Hutta**\n\nA modern, language-agnostic notebook by *Death Legion Team* — better than all notebooks.\n\n## What's new in v0.2\n\n- **Multi-platform sandboxes**: run code locally, in **E2B**, in **Daytona**, or in a **mock cloud** — pick one from the toolbar.\n- **AI Assistant**: open the side panel (Ctrl+/) to chat, explain cells, fix errors, or generate new cells.\n- **`%%ai` magic**: prepend `%%ai` to any cell to ask the LLM a question.\n- **Variables inspector**: see live state of your kernel.\n- **Command palette** (Ctrl+P): quick actions at your fingertips.\n- **Notebook persistence**: save and load notebooks from disk.\n- **Public API**: programmable by AI agents via API key (`/api/v1/*`).\n\nRun the cells below to verify your kernel is alive.",
   ),
   makeCell(
     "code",
-    'import sys\nprint("Legion Hutta v0.1.0")\nprint(f"Python {sys.version.split()[0]} on {sys.platform}")\nprint("Death Legion Team \u2014 better than all notebooks")\n\n# State persists across cells:\nx = 6\ny = 7\n',
+    'import sys\nprint("Legion Hutta v0.2.0")\nprint(f"Python {sys.version.split()[0]} on {sys.platform}")\nprint("Death Legion Team \u2014 better than all notebooks")\n\n# State persists across cells:\nx = 6\ny = 7\n',
   ),
   makeCell(
     "code",
     '# This cell reuses `x` and `y` from the previous cell.\nprint(f"x * y = {x * y}")\n\n# Try editing me and pressing Shift+Enter!\n',
   ),
+  makeCell(
+    "markdown",
+    "## Try the AI assistant\n\nPress **Ctrl+/** to open the AI side panel, or create a new cell starting with `%%ai`:\n\n```\n%%ai\nWrite a Python one-liner that returns the first 10 Fibonacci numbers.\n```\n",
+  ),
 ];
+
+// ---- Sandbox types ----
+
+export interface SandboxInfo {
+  name: string;
+  display_name: string;
+  description: string;
+  icon: string;
+  requires_api_key: boolean;
+  api_key_env_var: string | null;
+  docs_url: string | null;
+  available: boolean;
+  unavailable_reason: string | null;
+}
+
+// ---- Variables inspector ----
+
+export interface VariableInfo {
+  name: string;
+  type: string;
+  repr: string;
+  size: number;
+}
+
+// ---- AI assistant ----
+
+export interface AiMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  streaming?: boolean;
+  error?: boolean;
+}
+
+// ---- Notebooks list ----
+
+export interface NotebookListItem {
+  id: string;
+  title: string;
+  kernelSpec: string | null;
+  sandbox: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 interface NotebookStore extends NotebookState {
   specs: KernelSpec[];
   defaultSpecName: string | null;
+  sandboxes: SandboxInfo[];
+  selectedSandbox: string;
   isConnected: boolean;
   isStartingKernel: boolean;
   error: string | null;
 
+  // variables inspector
+  variables: VariableInfo[];
+  isVariablesLoading: boolean;
+  variablesPanelOpen: boolean;
+  refreshVariables: () => Promise<void>;
+  toggleVariablesPanel: (open?: boolean) => void;
+
+  // AI assistant
+  aiPanelOpen: boolean;
+  aiMessages: AiMessage[];
+  aiIsStreaming: boolean;
+  toggleAiPanel: (open?: boolean) => void;
+  sendAiMessage: (content: string) => Promise<void>;
+  clearAiMessages: () => void;
+  explainCell: (cellId: string) => Promise<void>;
+  fixCell: (cellId: string) => Promise<void>;
+  generateCells: (prompt: string, afterCellId?: string | null) => Promise<void>;
+
+  // notebooks list / persistence
+  notebooksList: NotebookListItem[];
+  notebooksPanelOpen: boolean;
+  toggleNotebooksPanel: (open?: boolean) => void;
+  refreshNotebooksList: () => Promise<void>;
+  saveCurrentNotebook: () => Promise<void>;
+  openNotebook: (id: string) => Promise<void>;
+  newNotebook: () => Promise<void>;
+  currentNotebookId: string | null;
+  isSaving: boolean;
+
+  // command palette
+  commandPaletteOpen: boolean;
+  toggleCommandPalette: (open?: boolean) => void;
+
   // lifecycle
   init: () => Promise<void>;
-  startKernel: (specName?: string) => Promise<void>;
+  startKernel: (specName?: string, sandboxName?: string) => Promise<void>;
   interruptKernel: () => Promise<void>;
   restartKernel: () => Promise<void>;
+  selectSandbox: (name: string) => Promise<void>;
 
   // cell ops
-  addCell: (afterCellId?: string | null, kind?: CellKind) => string;
+  addCell: (afterCellId?: string | null, kind?: CellKind, source?: string) => string;
   removeCell: (cellId: string) => void;
   moveCell: (cellId: string, direction: -1 | 1) => void;
   setCellSource: (cellId: string, source: string) => void;
   setActiveCell: (cellId: string | null) => void;
   setCellKind: (cellId: string, kind: CellKind) => void;
   clearCellOutput: (cellId: string) => void;
+  insertCells: (cells: Array<{ kind: CellKind; source: string }>, afterCellId?: string | null) => void;
 
   // execution
   runCell: (cellId: string) => Promise<void>;
@@ -97,26 +181,43 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   activeCellId: WELCOME_CELLS[1].id,
   specs: [],
   defaultSpecName: null,
+  sandboxes: [],
+  selectedSandbox: "local",
   isConnected: false,
   isStartingKernel: false,
   error: null,
 
+  variables: [],
+  isVariablesLoading: false,
+  variablesPanelOpen: false,
+
+  aiPanelOpen: false,
+  aiMessages: [],
+  aiIsStreaming: false,
+
+  notebooksList: [],
+  notebooksPanelOpen: false,
+  currentNotebookId: null,
+  isSaving: false,
+
+  commandPaletteOpen: false,
+
   init: async () => {
     try {
-      const [health, specs, existingKernels] = await Promise.all([
+      const [health, specs, existingKernels, sandboxes] = await Promise.all([
         api.health(),
         api.listKernelspecs(),
         api.listKernels(),
+        api.listSandboxes(),
       ]);
       set({
         isConnected: health.status === "ok",
         specs: Object.values(specs.kernelspecs),
         defaultSpecName: specs.default,
+        sandboxes: sandboxes.sandboxes,
+        selectedSandbox: sandboxes.sandboxes.find((s) => s.available)?.name ?? "local",
         error: null,
       });
-      // Reuse an existing idle kernel if the backend already has one
-      // (e.g. after a page reload). This avoids orphan kernels piling
-      // up in the backend's kernel manager during development.
       const reusable = existingKernels.kernels.find(
         (k) => k.status !== "dead" && k.spec?.name === (specs.default ?? "python3"),
       );
@@ -125,6 +226,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
           kernelId: reusable.kernel_id,
           kernelStatus: reusable.status,
           kernelSpec: reusable.spec,
+          selectedSandbox: reusable.sandbox?.spec?.name ?? get().selectedSandbox,
         });
       } else if (!get().kernelId) {
         await get().startKernel(specs.default ?? undefined);
@@ -137,16 +239,18 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
     }
   },
 
-  startKernel: async (specName?: string) => {
+  startKernel: async (specName?: string, sandboxName?: string) => {
     set({ isStartingKernel: true, error: null });
     try {
       const name = specName ?? get().defaultSpecName ?? "python3";
-      const kernel = await api.createKernel(name);
+      const sandbox = sandboxName ?? get().selectedSandbox ?? "local";
+      const kernel = await api.createKernel(name, sandbox);
       set({
         kernelId: kernel.kernel_id,
         kernelStatus: kernel.status,
         kernelSpec: kernel.spec,
         isStartingKernel: false,
+        selectedSandbox: sandbox,
       });
     } catch (err) {
       set({
@@ -154,6 +258,12 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
         error: err instanceof Error ? err.message : "Failed to start kernel",
       });
     }
+  },
+
+  selectSandbox: async (name: string) => {
+    set({ selectedSandbox: name });
+    // Switching sandboxes requires restarting the kernel on the new backend.
+    await get().startKernel(undefined, name);
   },
 
   interruptKernel: async () => {
@@ -173,7 +283,6 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
     try {
       set({ kernelStatus: "starting" });
       const k = await api.restartKernel(kernelId);
-      // Reset execution counts on all cells since the kernel state was cleared.
       set((s) => ({
         kernelStatus: k.status,
         cells: s.cells.map((c) => ({
@@ -184,14 +293,248 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
           errorSummary: null,
           isRunning: false,
         })),
+        variables: [],
       }));
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Restart failed" });
     }
   },
 
-  addCell: (afterCellId, kind = "code") => {
-    const cell = makeCell(kind);
+  refreshVariables: async () => {
+    const { kernelId } = get();
+    if (!kernelId) return;
+    set({ isVariablesLoading: true });
+    try {
+      const result = await api.getVariables(kernelId);
+      set({ variables: result.variables, isVariablesLoading: false });
+    } catch (err) {
+      set({
+        isVariablesLoading: false,
+        error: err instanceof Error ? err.message : "Failed to load variables",
+      });
+    }
+  },
+
+  toggleVariablesPanel: (open) =>
+    set((s) => ({ variablesPanelOpen: open ?? !s.variablesPanelOpen })),
+
+  toggleAiPanel: (open) =>
+    set((s) => ({ aiPanelOpen: open ?? !s.aiPanelOpen })),
+
+  toggleCommandPalette: (open) =>
+    set((s) => ({ commandPaletteOpen: open ?? !s.commandPaletteOpen })),
+
+  toggleNotebooksPanel: (open) => {
+    set((s) => ({ notebooksPanelOpen: open ?? !s.notebooksPanelOpen }));
+    if (open || (!open && get().notebooksPanelOpen)) {
+      // Refresh list when opening
+    }
+    if (open) {
+      void get().refreshNotebooksList();
+    }
+  },
+
+  sendAiMessage: async (content: string) => {
+    if (!content.trim()) return;
+    const userMsg: AiMessage = { id: newId(), role: "user", content };
+    const assistantMsg: AiMessage = {
+      id: newId(),
+      role: "assistant",
+      content: "",
+      streaming: true,
+    };
+    set((s) => ({
+      aiMessages: [...s.aiMessages, userMsg, assistantMsg],
+      aiIsStreaming: true,
+    }));
+
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content }],
+          context: buildAiContext(get()),
+        }),
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`AI chat failed: ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        set((s) => ({
+          aiMessages: s.aiMessages.map((m) =>
+            m.id === assistantMsg.id ? { ...m, content: m.content + chunk } : m,
+          ),
+        }));
+      }
+      set((s) => ({
+        aiMessages: s.aiMessages.map((m) =>
+          m.id === assistantMsg.id ? { ...m, streaming: false } : m,
+        ),
+        aiIsStreaming: false,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "AI request failed";
+      set((s) => ({
+        aiMessages: s.aiMessages.map((m) =>
+          m.id === assistantMsg.id
+            ? { ...m, streaming: false, error: true, content: m.content || `[ERROR: ${message}]` }
+            : m,
+        ),
+        aiIsStreaming: false,
+      }));
+    }
+  },
+
+  clearAiMessages: () => set({ aiMessages: [] }),
+
+  explainCell: async (cellId: string) => {
+    const cell = get().cells.find((c) => c.id === cellId);
+    if (!cell) return;
+    set({ aiPanelOpen: true });
+    const prompt = `Explain this code:\n\n\`\`\`python\n${cell.source}\n\`\`\``;
+    await get().sendAiMessage(prompt);
+  },
+
+  fixCell: async (cellId: string) => {
+    const cell = get().cells.find((c) => c.id === cellId);
+    if (!cell || !cell.errorSummary) return;
+    set({ aiPanelOpen: true });
+    const prompt = `Fix this error.\n\nCode:\n\`\`\`python\n${cell.source}\n\`\`\`\n\nError: ${cell.errorSummary.name}: ${cell.errorSummary.value}`;
+    await get().sendAiMessage(prompt);
+  },
+
+  generateCells: async (prompt: string, afterCellId?: string | null) => {
+    set({ aiIsStreaming: true, error: null });
+    try {
+      const res = await fetch("/api/ai/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, context: buildAiContext(get()) }),
+      });
+      if (!res.ok) throw new Error(`Generate failed: ${res.status}`);
+      const data = (await res.json()) as {
+        cells: Array<{ kind: CellKind; source: string }>;
+      };
+      get().insertCells(data.cells, afterCellId ?? get().activeCellId);
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : "Generate failed",
+      });
+    } finally {
+      set({ aiIsStreaming: false });
+    }
+  },
+
+  refreshNotebooksList: async () => {
+    try {
+      const res = await fetch("/api/notebooks");
+      if (!res.ok) throw new Error(`List failed: ${res.status}`);
+      const data = (await res.json()) as { notebooks: NotebookListItem[] };
+      set({ notebooksList: data.notebooks });
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : "Failed to list notebooks",
+      });
+    }
+  },
+
+  saveCurrentNotebook: async () => {
+    const { cells, title, currentNotebookId } = get();
+    set({ isSaving: true });
+    try {
+      let id = currentNotebookId;
+      if (id) {
+        const res = await fetch(`/api/notebooks/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cells, title }),
+        });
+        if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+      } else {
+        const res = await fetch("/api/notebooks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            kernelSpec: get().kernelSpec?.name ?? "python3",
+            sandbox: get().selectedSandbox,
+            cells,
+          }),
+        });
+        if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+        const data = (await res.json()) as { notebook: { id: string } };
+        id = data.notebook.id;
+        set({ currentNotebookId: id });
+      }
+      set({ isSaving: false, error: null });
+      void get().refreshNotebooksList();
+    } catch (err) {
+      set({
+        isSaving: false,
+        error: err instanceof Error ? err.message : "Failed to save notebook",
+      });
+    }
+  },
+
+  openNotebook: async (id: string) => {
+    try {
+      const res = await fetch(`/api/notebooks/${id}`);
+      if (!res.ok) throw new Error(`Open failed: ${res.status}`);
+      const data = (await res.json()) as {
+        notebook: {
+          id: string;
+          title: string;
+          kernelSpec: string | null;
+          sandbox: string | null;
+          cells: CellModel[];
+        };
+      };
+      const nb = data.notebook;
+      // Re-id cells so React keys are stable
+      const cells = nb.cells.map((c) => ({ ...c, id: newId(), isRunning: false }));
+      set({
+        currentNotebookId: nb.id,
+        title: nb.title,
+        cells,
+        activeCellId: cells[0]?.id ?? null,
+        notebooksPanelOpen: false,
+        // Reset outputs since the kernel state doesn't match the loaded notebook
+        kernelId: null,
+        kernelStatus: null,
+      });
+      // Start a fresh kernel for the loaded notebook
+      const sandboxName = nb.sandbox ?? get().selectedSandbox;
+      await get().startKernel(nb.kernelSpec ?? undefined, sandboxName);
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : "Failed to open notebook",
+      });
+    }
+  },
+
+  newNotebook: async () => {
+    set({
+      currentNotebookId: null,
+      title: "untitled.ipynb",
+      cells: [makeCell("code", "")],
+      activeCellId: null,
+      notebooksPanelOpen: false,
+      outputs: [],
+      variables: [],
+    });
+    if (!get().kernelId) {
+      await get().startKernel();
+    }
+  },
+
+  addCell: (afterCellId, kind = "code", source = "") => {
+    const cell = makeCell(kind, source);
     set((s) => {
       const idx = afterCellId ? s.cells.findIndex((c) => c.id === afterCellId) : s.cells.length - 1;
       const cells = [...s.cells];
@@ -199,6 +542,16 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       return { cells, activeCellId: cell.id };
     });
     return cell.id;
+  },
+
+  insertCells: (newCells, afterCellId) => {
+    set((s) => {
+      const idx = afterCellId ? s.cells.findIndex((c) => c.id === afterCellId) : s.cells.length - 1;
+      const cells = [...s.cells];
+      const mapped = newCells.map((c) => makeCell(c.kind, c.source));
+      cells.splice(idx + 1, 0, ...mapped);
+      return { cells, activeCellId: mapped[0]?.id ?? s.activeCellId };
+    });
   },
 
   removeCell: (cellId) => {
@@ -258,13 +611,12 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
     const state = get();
     const cell = state.cells.find((c) => c.id === cellId);
     if (!cell) return;
-    if (cell.kind === "markdown") return; // markdown cells are rendered, not executed
+    if (cell.kind === "markdown") return;
     if (!state.kernelId) {
       set({ error: "No kernel is running. Restart the kernel and try again." });
       return;
     }
 
-    // Mark running, clear previous output
     set((s) => ({
       cells: s.cells.map((c) =>
         c.id === cellId
@@ -275,33 +627,27 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
     }));
 
     const controller = new AbortController();
-    // Track the active controller so interrupt can abort it. We stash
-    // it on the store via a closure variable for simplicity.
     activeExecutionController = controller;
 
     try {
       let finalCount: number | null = null;
       let success = true;
       let errorSummary: CellModel["errorSummary"] = null;
-      const collected: OutputChunk[] = [];
 
       for await (const ev of api.executeStream(state.kernelId, cell.source, controller.signal)) {
         if (ev.kind === "chunk") {
-          // Filter out status chunks — we don't render them as output.
           if (ev.type === "status") {
             if (typeof ev.data.execution_count === "number") {
               finalCount = ev.data.execution_count as number;
             }
             continue;
           }
-          collected.push(ev);
           set((s) => ({
             cells: s.cells.map((c) =>
               c.id === cellId ? { ...c, outputs: [...c.outputs, ev] } : c,
             ),
           }));
         } else {
-          // done
           success = ev.success;
           finalCount = ev.execution_count;
           if (!success) {
@@ -326,8 +672,12 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
               }
             : c,
         ),
-        kernelStatus: success ? "idle" : "idle",
+        kernelStatus: "idle",
       }));
+      // Auto-refresh variables if the panel is open.
+      if (get().variablesPanelOpen) {
+        void get().refreshVariables();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Execution failed";
       set((s) => ({
@@ -354,7 +704,6 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
     for (const cell of cells) {
       if (cell.kind === "code") {
         await get().runCell(cell.id);
-        // Stop running if a cell errored — like Jupyter's default behavior.
         const updated = get().cells.find((c) => c.id === cell.id);
         if (updated?.hasError) break;
       }
@@ -364,13 +713,36 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   setTitle: (title) => set({ title }),
 }));
 
-// Module-level holder for the currently-running execution's AbortController,
-// so the interrupt button can cancel it. Kept outside the store because it's
-// an imperative handle, not reactive state.
+// ---- Helpers ----
+
 let activeExecutionController: AbortController | null = null;
 
 export function abortActiveExecution() {
   if (activeExecutionController) {
     activeExecutionController.abort();
   }
+}
+
+/**
+ * Build a compact JSON context string for the AI assistant. Includes
+ * kernel status, variables, and the last few cells (source only).
+ */
+function buildAiContext(state: NotebookStore): string {
+  const recentCells = state.cells.slice(-6).map((c, i) => ({
+    index: state.cells.length - 6 + i,
+    kind: c.kind,
+    source: c.source.slice(0, 500),
+    hasError: c.hasError,
+    executionCount: c.executionCount,
+  }));
+  return JSON.stringify({
+    kernel: {
+      status: state.kernelStatus,
+      spec: state.kernelSpec?.name ?? null,
+      sandbox: state.selectedSandbox,
+      execution_count: state.cells.filter((c) => c.executionCount !== null).length,
+    },
+    variables: state.variables.slice(0, 30),
+    recentCells,
+  });
 }

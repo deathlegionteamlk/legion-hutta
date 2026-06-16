@@ -17,12 +17,12 @@ import type {
 
 const BACKEND_PORT = "8000";
 
-function backendUrl(path: string, extra: Record<string, string> = {}): string {
+export function backendUrl(path: string, extra: Record<string, string> = {}): string {
   const search = new URLSearchParams({ XTransformPort: BACKEND_PORT, ...extra });
   return `${path}?${search.toString()}`;
 }
 
-async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
+export async function backendFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(backendUrl(path), {
     ...init,
     headers: {
@@ -43,6 +43,11 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Internal alias for backwards compatibility within this file.
+async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  return backendFetch<T>(path, init);
+}
+
 export const api = {
   health: () =>
     jsonFetch<{ status: string; service: string; team: string; kernels_running: number }>(
@@ -51,12 +56,27 @@ export const api = {
 
   listKernelspecs: () => jsonFetch<KernelspecsResponse>("/api/kernelspecs"),
 
+  listSandboxes: () =>
+    jsonFetch<{
+      sandboxes: Array<{
+        name: string;
+        display_name: string;
+        description: string;
+        icon: string;
+        requires_api_key: boolean;
+        api_key_env_var: string | null;
+        docs_url: string | null;
+        available: boolean;
+        unavailable_reason: string | null;
+      }>;
+    }>("/api/sandboxes"),
+
   listKernels: () => jsonFetch<{ kernels: KernelInfo[] }>("/api/kernels"),
 
-  createKernel: (name: string = "python3") =>
+  createKernel: (name: string = "python3", sandbox: string = "local") =>
     jsonFetch<KernelInfo>("/api/kernels", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, sandbox }),
     }),
 
   getKernel: (id: string) => jsonFetch<KernelInfo>(`/api/kernels/${id}`),
@@ -71,6 +91,17 @@ export const api = {
 
   restartKernel: (id: string) =>
     jsonFetch<KernelInfo>(`/api/kernels/${id}/restart`, { method: "POST" }),
+
+  /** Variables inspector — returns the kernel's globals. */
+  getVariables: (id: string) =>
+    jsonFetch<{
+      variables: Array<{
+        name: string;
+        type: string;
+        repr: string;
+        size: number;
+      }>;
+    }>(`/api/kernels/${id}/variables`),
 
   /** Non-streaming execute — returns the aggregated result. */
   execute: (kernelId: string, code: string) =>

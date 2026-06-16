@@ -4,10 +4,19 @@
  * Notebook — the top-level notebook shell.
  *
  * Wires up:
- *  - Backend init on mount (health check + auto-start kernel)
- *  - Keyboard shortcuts (Shift+Enter / Ctrl+Enter / Alt+Enter, B/A
- *    above/below, D D delete, etc.)
- *  - Renders the toolbar + scrollable list of cells + footer status
+ *  - Backend init on mount (health check + auto-start kernel + load sandboxes)
+ *  - Keyboard shortcuts:
+ *      Shift+Enter / Ctrl+Enter / Alt+Enter  run cell variants
+ *      B / A                                  insert cell below/above
+ *      D D                                    delete cell
+ *      ↑ / ↓                                  navigate cells
+ *      Enter                                  edit cell
+ *      Esc                                    exit edit mode
+ *      Ctrl+P                                 command palette
+ *      Ctrl+/                                 AI assistant panel
+ *      Ctrl+Shift+V                           variables inspector
+ *  - Renders Toolbar + Cell list + footer status
+ *  - Mounts the side panels (AI, Variables) and modals (Notebooks, CommandPalette)
  */
 
 import { useEffect } from "react";
@@ -16,6 +25,10 @@ import { Toolbar } from "./Toolbar";
 import { Cell } from "./Cell";
 import { Button } from "@/components/ui/button";
 import { Plus, Keyboard } from "lucide-react";
+import { AiAssistant } from "./AiAssistant";
+import { VariablesInspector } from "./VariablesInspector";
+import { NotebooksBrowser } from "./NotebooksBrowser";
+import { CommandPalette } from "./CommandPalette";
 
 export function Notebook() {
   const cells = useNotebookStore((s) => s.cells);
@@ -25,18 +38,38 @@ export function Notebook() {
   const setActiveCell = useNotebookStore((s) => s.setActiveCell);
   const runCell = useNotebookStore((s) => s.runCell);
   const removeCell = useNotebookStore((s) => s.removeCell);
+  const toggleCommandPalette = useNotebookStore((s) => s.toggleCommandPalette);
+  const toggleAiPanel = useNotebookStore((s) => s.toggleAiPanel);
+  const toggleVariablesPanel = useNotebookStore((s) => s.toggleVariablesPanel);
+  const aiPanelOpen = useNotebookStore((s) => s.aiPanelOpen);
+  const variablesPanelOpen = useNotebookStore((s) => s.variablesPanelOpen);
 
   // Boot the backend connection + kernel on first mount.
   useEffect(() => {
-    init();
+    void init();
   }, [init]);
 
-  // Global keyboard shortcuts. We attach to window because CodeMirror
-  // stops propagation on some keys but not others; this catches the
-  // notebook-level commands reliably.
+  // Global keyboard shortcuts.
   useEffect(() => {
     let lastDPress = 0;
     const handler = (e: KeyboardEvent) => {
+      // Global shortcuts that work even when editing
+      if ((e.ctrlKey || e.metaKey) && e.key === "p") {
+        e.preventDefault();
+        toggleCommandPalette();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+        e.preventDefault();
+        toggleAiPanel();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        toggleVariablesPanel();
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       const isTyping =
         target &&
@@ -45,7 +78,6 @@ export function Notebook() {
           target.isContentEditable ||
           target.closest(".cm-editor"));
 
-      // Escape blurs the editor so notebook shortcuts work.
       if (e.key === "Escape" && isTyping) {
         (target as HTMLElement).blur();
         return;
@@ -56,7 +88,6 @@ export function Notebook() {
       const idx = cells.findIndex((c) => c.id === activeCellId);
       if (idx < 0) return;
 
-      // B / A — insert cell below / above
       if (e.key === "b" || e.key === "B") {
         e.preventDefault();
         addCell(activeCellId, "code");
@@ -68,7 +99,6 @@ export function Notebook() {
         addCell(prevId, "code");
         return;
       }
-      // Double-tap D to delete (mirrors Jupyter)
       if (e.key === "d" || e.key === "D") {
         const now = Date.now();
         if (now - lastDPress < 400) {
@@ -78,7 +108,6 @@ export function Notebook() {
         lastDPress = now;
         return;
       }
-      // Arrow up/down to navigate cells
       if (e.key === "ArrowUp") {
         e.preventDefault();
         if (idx > 0) setActiveCell(cells[idx - 1].id);
@@ -89,7 +118,6 @@ export function Notebook() {
         if (idx < cells.length - 1) setActiveCell(cells[idx + 1].id);
         return;
       }
-      // Enter to start editing
       if (e.key === "Enter") {
         e.preventDefault();
         const cell = cells[idx];
@@ -99,7 +127,6 @@ export function Notebook() {
         editor?.focus();
         return;
       }
-      // Ctrl/Cmd+Enter runs the active cell
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         runCell(activeCellId);
@@ -107,13 +134,19 @@ export function Notebook() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCellId, cells, addCell, removeCell, setActiveCell, runCell]);
+  }, [activeCellId, cells, addCell, removeCell, setActiveCell, runCell, toggleCommandPalette, toggleAiPanel, toggleVariablesPanel]);
+
+  // Compute padding for open side panels so content doesn't go under them.
+  const sidePadding = `${variablesPanelOpen ? "20rem" : "0"} ${aiPanelOpen ? "28rem" : "0"} 0 0`;
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <Toolbar />
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
+      <main
+        className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 transition-[padding] duration-200"
+        style={{ paddingTop: "1.5rem", paddingRight: aiPanelOpen ? "28rem" : undefined }}
+      >
         <div className="flex flex-col gap-3">
           {cells.map((cell, idx) => (
             <div key={cell.id} data-cell-id={cell.id}>
@@ -140,12 +173,20 @@ export function Notebook() {
       <footer className="mt-auto border-t border-border/60 bg-muted/30 px-4 py-3">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
           <span>
-            Legion Hutta v0.1.0 · by{" "}
+            Legion Hutta v0.2.0 · by{" "}
             <span className="font-medium text-foreground/80">Death Legion Team</span>
           </span>
           <span className="font-mono">better than all notebooks</span>
         </div>
       </footer>
+
+      {/* Side panels */}
+      <VariablesInspector />
+      <AiAssistant />
+
+      {/* Modals */}
+      <NotebooksBrowser />
+      <CommandPalette />
     </div>
   );
 }
@@ -167,6 +208,9 @@ function KeyboardHints() {
         <Hint k="↑ / ↓" desc="Navigate cells" />
         <Hint k="Enter" desc="Edit cell" />
         <Hint k="Esc" desc="Exit edit mode" />
+        <Hint k="Ctrl+P" desc="Command palette" />
+        <Hint k="Ctrl+/" desc="AI assistant" />
+        <Hint k="Ctrl+Shift+V" desc="Variables inspector" />
       </div>
     </div>
   );

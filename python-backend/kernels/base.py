@@ -1,12 +1,14 @@
 """
 Abstract base class for all kernels in Legion Hutta.
 
-This defines the language-agnostic kernel interface. Each language
-kernel (Python, JavaScript, R, etc.) must implement this contract so
-the kernel manager and API layer can treat them uniformly.
+A kernel is the user-facing execution context — it has a language,
+an execution count, lifecycle status, and a sandbox where code
+actually runs. The sandbox is pluggable (local subprocess, E2B,
+Daytona, mock cloud, ...) so a single kernel implementation can
+target multiple execution backends.
 
-Inspired by Jupyter's kernel specification, but intentionally simpler
-to keep the codebase approachable for new contributors.
+Adding a new LANGUAGE = subclass BaseKernel + register in KERNEL_REGISTRY.
+Adding a new SANDBOX  = subclass BaseSandbox + register in SANDBOX_REGISTRY.
 """
 from __future__ import annotations
 
@@ -15,12 +17,12 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
+
+from sandboxes import BaseSandbox, ExecutionRequest
 
 
 class KernelStatus(str, Enum):
-    """Lifecycle status of a kernel instance."""
-
     STARTING = "starting"
     IDLE = "idle"
     BUSY = "busy"
@@ -29,19 +31,15 @@ class KernelStatus(str, Enum):
 
 
 class OutputType(str, Enum):
-    """Output stream type emitted during code execution."""
-
     STDOUT = "stdout"
     STDERR = "stderr"
-    RESULT = "result"  # rich display result (e.g. repr of last expression)
-    ERROR = "error"  # structured error
-    STATUS = "status"  # kernel lifecycle event
+    RESULT = "result"
+    ERROR = "error"
+    STATUS = "status"
 
 
 @dataclass
 class OutputChunk:
-    """A single chunk of output streamed from a kernel execution."""
-
     type: OutputType
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
@@ -58,8 +56,6 @@ class OutputChunk:
 
 @dataclass
 class ExecutionResult:
-    """Final result of a code execution."""
-
     success: bool
     outputs: list[OutputChunk] = field(default_factory=list)
     error_name: Optional[str] = None
@@ -82,36 +78,36 @@ class ExecutionResult:
 
 @dataclass
 class KernelSpec:
-    """Static specification describing a kernel language.
-
-    Implementations register themselves with the kernel manager by
-    exposing a KernelSpec. This lets the UI render a "new kernel"
-    menu without the backend having to know about every language.
-    """
-
-    name: str  # e.g. "python3"
-    display_name: str  # e.g. "Python 3"
-    language: str  # e.g. "python"
-    file_extension: str  # e.g. ".py"
-    codemirror_mode: str = "python"  # hint for the frontend editor
+    name: str
+    display_name: str
+    language: str
+    file_extension: str
+    codemirror_mode: str = "python"
     description: str = ""
 
 
 class BaseKernel(abc.ABC):
     """Abstract kernel contract.
 
-    A kernel represents a long-lived execution context that maintains
-    state across multiple code executions (variables, imports, etc.).
+    A kernel owns:
+      - identity (kernel_id, spec, status, execution_count)
+      - a sandbox instance where code actually runs
+
+    Subclasses customize `start()` and `execute()` to wire up the
+    sandbox and translate sandbox events into kernel output chunks.
     """
 
-    def __init__(self, kernel_id: Optional[str] = None):
+    def __init__(
+        self,
+        kernel_id: Optional[str] = None,
+        sandbox: Optional[BaseSandbox] = None,
+    ):
         self.kernel_id: str = kernel_id or str(uuid.uuid4())
         self.status: KernelStatus = KernelStatus.STARTING
         self.execution_count: int = 0
         self.created_at: float = time.time()
         self.last_activity: float = time.time()
-
-    # ---- Abstract API ----
+        self.sandbox: Optional[BaseSandbox] = sandbox
 
     @staticmethod
     @abc.abstractmethod
@@ -120,24 +116,15 @@ class BaseKernel(abc.ABC):
 
     @abc.abstractmethod
     async def start(self) -> None:
-        """Start the kernel process / runtime."""
+        """Start the kernel + its sandbox."""
 
     @abc.abstractmethod
-    async def execute(self, code: str) -> AsyncIterator[OutputChunk]:
-        """Execute `code` and yield output chunks as they arrive.
-
-        Implementations MUST:
-        - Increment `self.execution_count` exactly once per call.
-        - Set `self.status` to BUSY at the start and IDLE (or DEAD)
-          at the end.
-        - Update `self.last_activity` before yielding each chunk.
-        - Yield an `OutputChunk(type=STATUS)` at the start and end so
-          the frontend can show live kernel state.
-        """
+    async def execute(self, code: str) -> Any:
+        """Execute `code`, yielding OutputChunk objects."""
 
     @abc.abstractmethod
     async def interrupt(self) -> None:
-        """Interrupt the currently-running execution if any."""
+        """Interrupt the currently-running execution."""
 
     @abc.abstractmethod
     async def restart(self) -> None:
@@ -147,7 +134,15 @@ class BaseKernel(abc.ABC):
     async def shutdown(self) -> None:
         """Shut down the kernel and release all resources."""
 
-    # ---- Helpers ----
+    async def introspect(self) -> dict[str, Any]:
+        """Return variables in the kernel's global scope.
+
+        Default implementation delegates to the sandbox. Subclasses
+        can override for custom introspection.
+        """
+        if self.sandbox:
+            return await self.sandbox.introspect()
+        return {"variables": []}
 
     def _touch(self) -> None:
         self.last_activity = time.time()
@@ -167,4 +162,5 @@ class BaseKernel(abc.ABC):
                 "codemirror_mode": self.spec().codemirror_mode,
                 "description": self.spec().description,
             },
+            "sandbox": self.sandbox.to_dict() if self.sandbox else None,
         }
