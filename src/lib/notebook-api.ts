@@ -1,10 +1,16 @@
 /**
  * API client for the Legion Hutta Python backend.
  *
- * The backend runs on port 8000. The dev gateway (Caddy) forwards
- * any request containing `?XTransformPort=8000` to that port, so we
- * ALWAYS append that query param to backend calls — including SSE
- * streams.
+ * The backend runs on port 8000. In dev (`next dev`), Next.js `rewrites`
+ * in next.config.ts forward same-origin /api/{health,kernels,kernelspecs,v1}
+ * to localhost:8000 — so the browser calls /api/foo?XTransformPort=8000
+ * and Next.js rewrites it. The `XTransformPort=8000` query param is also
+ * honoured by the production gateway.
+ *
+ * For server-side calls (Next.js route handlers), relative URLs don't
+ * work — we need an absolute origin. `backendBaseUrl()` returns the
+ * right origin depending on whether we're in the browser or in a
+ * Node server worker.
  */
 
 import type {
@@ -16,10 +22,16 @@ import type {
 } from "@/types/notebook";
 
 const BACKEND_PORT = "8000";
+const BACKEND_HOST = process.env.LEGION_BACKEND_HOST ?? "localhost";
+const BACKEND_ORIGIN = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 
 export function backendUrl(path: string, extra: Record<string, string> = {}): string {
   const search = new URLSearchParams({ XTransformPort: BACKEND_PORT, ...extra });
-  return `${path}?${search.toString()}`;
+  // In the browser, use a same-origin relative URL — the gateway / Next.js
+  // rewrite will route it. On the server (Node route handler), use an
+  // absolute URL so fetch() doesn't fail with "Invalid URL".
+  const prefix = typeof window !== "undefined" ? "" : BACKEND_ORIGIN;
+  return `${prefix}${path}?${search.toString()}`;
 }
 
 export async function backendFetch<T>(path: string, init?: RequestInit): Promise<T> {

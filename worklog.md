@@ -214,3 +214,62 @@ Stage Summary:
      - Round-trips losslessly through the frontend store
      - Converts to/from `.ipynb` (nbformat 4) for Jupyter interop, with Legion metadata preserved under `metadata.legion-hutta` so a round-trip doesn't lose sandbox info
 - AI agents get first-class `.legion` support via the new v1 format endpoints: they can validate documents, convert between formats, and introspect the schema programmatically. An agent can now build a notebook from scratch, POST it to `/api/v1/format/legion` to validate, convert to `.ipynb` if needed, and execute on a kernel — all without the UI.
+
+---
+Task ID: v0.3.1
+Agent: main
+Task: Fix hydration mismatch + add many new features (cell collapsing, execution timing, outline/TOC, find&replace, shortcuts help, word wrap toggle, auto-save).
+
+Work Log:
+- **Fixed hydration mismatch (root cause).** The `WELCOME_CELLS` array was constructed at module-load time using `newId()` which combines `Date.now()` + `Math.random()` — server and client each evaluated it once, producing different IDs that got baked into SSR'd `data-cell-id` attributes. Added a `stableId(prefix)` counter-based generator and used it for all module-level (SSR-rendered) cells and for the store's top-level `id`. Runtime-created cells (addCell, insertCells) still use `newId()` — those only happen post-hydration so they're safe. Verified: no more hydration warnings in the browser console.
+- **Extended `CellModel`** with two new fields: `executionTimeMs: number | null` (wall-clock time of the last run) and `collapsed: boolean` (hide code, show output only). Updated `makeCell`, `applyLegionDocument`, `openNotebook`, and `notebook-persistence.ts` to round-trip them.
+- **Extended the Zustand store** with new state + actions:
+  - `findReplaceOpen`, `toggleFindReplace`, `findInCells(query, opts)`, `replaceInCells(query, replacement, opts)` — supports plain-text + regex, case-sensitive toggle, returns per-cell match counts
+  - `shortcutsHelpOpen`, `toggleShortcutsHelp`
+  - `outlineOpen`, `toggleOutlinePanel`, `jumpToCell(cellId)` (scrolls the cell into view)
+  - `wordWrap`, `toggleWordWrap`; `lineNumbers`, `toggleLineNumbers`
+  - `toggleCellCollapsed`, `collapseAll`, `expandAll`
+  - `autoSaveEnabled` (default true), `toggleAutoSave`, `dirty`, `markDirty`
+  - `setCellSource` now marks `dirty: true`; `saveCurrentNotebook` and `applyLegionDocument` clear `dirty`
+  - `runCell` now measures wall-clock time via `performance.now()` and stores it on the cell
+- **Updated `Cell.tsx`** to:
+  - Render a chevron button in the left gutter that toggles `collapsed` (code cells only)
+  - Show `executionTimeMs` as a small monospace badge under the execution count, with a `formatDuration()` helper that handles `<1ms`, `123ms`, `1.23s`, `2m30s`
+  - Skip rendering the `CodeEditor` when collapsed; show a "Code hidden — click the chevron to expand" hint if there's no output
+  - Show a subtle execution-time footer inside collapsed cells (since the gutter badge is hidden)
+  - Pass `wordWrap` and `lineNumbers` props to `CodeEditor`
+- **Updated `CodeEditor.tsx`** to accept `wordWrap?: boolean` and `lineNumbers?: boolean` props. Word wrap toggles `EditorView.lineWrapping` on/off; line numbers toggles the `basicSetup.lineNumbers` flag.
+- **Created 3 new components:**
+  - `Outline.tsx` — left-side TOC panel. Scans markdown cells for ATX headings (`#`..`######`) and lists them as clickable buttons indented by heading level. Clicking jumps to the cell and smooth-scrolls it into view. Active cell is highlighted.
+  - `FindReplace.tsx` — modal dialog for finding & replacing text across all cells. Live per-cell match counts, case-sensitive + regex toggles, "Replace All" reports how many replacements were made. Closes on Esc or backdrop click.
+  - `ShortcutsHelp.tsx` — modal dialog with a 2-column grid of every keyboard shortcut, grouped (Running cells / Cell navigation / Panels & palette / Notebook).
+- **Updated `Notebook.tsx`** to:
+  - Mount `Outline`, `FindReplace`, `ShortcutsHelp` components
+  - Auto-save every 30s when `dirty && currentNotebookId && !isSaving` (via `setInterval`)
+  - Handle 9 new keyboard shortcuts: `C` (collapse/expand), `Ctrl+Shift+O` (outline), `Ctrl+H` (find&replace), `Ctrl+S` (save), `Ctrl+Shift+E` (export .legion), `Ctrl+Shift+J` (export .ipynb), `Ctrl+Shift+I` (import file), `?` (shortcuts help), and a smarter `Escape` that closes any open modal first
+  - Adjust main content padding for the new Outline panel (18rem on the left when open)
+  - Updated `KeyboardHints` footer with the new shortcuts
+- **Updated `CommandPalette.tsx`** with 3 new groups: "File format" (export/import), "Editor settings" (word wrap, line numbers, auto-save), and expanded "Cells" + "Panels" + "Help" groups.
+- **Updated `Toolbar.tsx`** with 4 new icon buttons: Outline (List), Find&Replace (Search), Word Wrap (WrapText), plus a dirty-indicator dot on the Save button (amber 1.5px dot when there are unsaved changes).
+- **Fixed backend API routing for local dev.** The frontend was calling same-origin `/api/health?XTransformPort=8000` on port 3000, expecting the production gateway to route it — but in `next dev` there's no gateway. Added `rewrites()` in `next.config.ts` to forward `/api/{health,kernelspecs,kernels,kernels/:path*,sandboxes,v1/:path*}` to `http://localhost:8000/...`. Also updated `backendUrl()` in `notebook-api.ts` to detect server-side (no `window`) and prepend an absolute origin (`http://localhost:8000`) so the Next.js route handlers that call `backendFetch()` don't fail with "Invalid URL".
+
+Stage Summary:
+- v0.3.1 ships the hydration bug fix plus 7 new end-user features:
+  1. **Per-cell execution timing** — `130ms` badge in the gutter after every run; `formatDuration()` scales from ms to m+s.
+  2. **Cell collapsing** — chevron in the left gutter or `C` key hides the code editor; output stays visible. `collapseAll`/`expandAll` available in the command palette.
+  3. **Outline / TOC panel** (Ctrl+Shift+O) — left-side panel listing every markdown heading; click to jump.
+  4. **Find & replace across all cells** (Ctrl+H) — modal with live per-cell match counts, case-sensitive + regex toggles, Replace All.
+  5. **Keyboard shortcuts help dialog** (`?`) — modal listing every shortcut grouped by category.
+  6. **Word wrap toggle** — toolbar button or command palette; CodeMirror's `lineWrapping` extension toggles on/off.
+  7. **Auto-save** — every 30s if the notebook is dirty and has a `currentNotebookId`. Toolbar save button shows an amber dot when there are unsaved changes.
+- Plus the under-the-hood fix: `next.config.ts rewrites()` + `backendUrl()` server-side origin detection make local dev "just work" without the production gateway.
+- Verified end-to-end in the browser:
+  - No hydration warnings
+  - Kernel status shows "idle Python 3"
+  - Run All executes both code cells; outputs render; persistent state works (`x * y = 42`)
+  - Execution time badges show `130ms` and `106ms` in the gutters
+  - Outline panel shows "Welcome to Legion Hutta" + "Try the AI assistant" headings
+  - `C` shortcut collapses the active code cell (button title flips to "Expand code")
+  - Find & Replace dialog opens with Ctrl+H and lists per-cell matches
+  - Shortcuts help opens with `?`
+- TypeScript clean. ESLint clean. No console errors. Screenshot saved to `download/notebook-v0.3-features.png`.

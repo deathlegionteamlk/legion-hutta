@@ -102,6 +102,10 @@ export interface CellModel {
   hasError: boolean;
   /** Cached error summary for display. */
   errorSummary: { name: string; value: string; traceback: string[] } | null;
+  /** Wall-clock time of the last execution in milliseconds, or null. */
+  executionTimeMs: number | null;
+  /** True if the code editor is collapsed (output only). */
+  collapsed: boolean;
 }
 
 export interface NotebookState {

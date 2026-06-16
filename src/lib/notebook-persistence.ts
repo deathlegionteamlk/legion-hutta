@@ -47,6 +47,8 @@ function rowToCellModel(row: CellRow): CellModel {
     isRunning: false,
     hasError: outputs.some((o) => o.type === "error"),
     errorSummary: null,
+    executionTimeMs: null,
+    collapsed: false,
   };
 }
 

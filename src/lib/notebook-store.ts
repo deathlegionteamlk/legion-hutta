@@ -35,9 +35,28 @@ function newId(): string {
   );
 }
 
-function makeCell(kind: CellKind = "code", source: string = ""): CellModel {
+/**
+ * Deterministic ID generator for SSR-rendered initial state.
+ *
+ * The server and client each evaluate the module top-level once; if we
+ * used `newId()` there, the IDs would differ between server-rendered
+ * HTML and the client's first render, producing a hydration mismatch
+ * on every `data-cell-id` attribute. Using a counter + fixed prefix
+ * guarantees identical IDs on both sides.
+ *
+ * Runtime-created cells (addCell, insertCells) only happen after user
+ * interaction, so they're always client-only and can safely use the
+ * non-deterministic `newId()`.
+ */
+let _stableIdCounter = 0;
+function stableId(prefix = "cell"): string {
+  _stableIdCounter += 1;
+  return `${prefix}-${_stableIdCounter.toString(36).padStart(4, "0")}`;
+}
+
+function makeCell(kind: CellKind = "code", source: string = "", id?: string): CellModel {
   return {
-    id: newId(),
+    id: id ?? newId(),
     kind,
     source,
     outputs: [],
@@ -45,6 +64,8 @@ function makeCell(kind: CellKind = "code", source: string = ""): CellModel {
     isRunning: false,
     hasError: false,
     errorSummary: null,
+    executionTimeMs: null,
+    collapsed: false,
   };
 }
 
@@ -52,18 +73,22 @@ const WELCOME_CELLS: CellModel[] = [
   makeCell(
     "markdown",
     "# Welcome to **Legion Hutta**\n\nA modern, language-agnostic notebook by *Death Legion Team* — better than all notebooks.\n\n## What's new in v0.3\n\n- **Native `.legion` file format**: save and load notebooks in Legion's own format (with sandbox + AI history). Import and export `.ipynb` for Jupyter compatibility.\n- **Multi-platform sandboxes**: run code locally, in **E2B**, or in **Daytona** — pick one from the toolbar.\n- **AI Assistant**: open the side panel (Ctrl+/) to chat, explain cells, fix errors, or generate new cells.\n- **`%%ai` magic**: prepend `%%ai` to any cell to ask the LLM a question.\n- **Variables inspector**: see live state of your kernel.\n- **Command palette** (Ctrl+P): quick actions at your fingertips.\n- **Notebook persistence**: save and load notebooks to the local DB.\n- **Public API**: programmable by AI agents via API key (`/api/v1/*`).\n\nRun the cells below to verify your kernel is alive.",
+    stableId("welcome"),
   ),
   makeCell(
     "code",
     'import sys\nprint("Legion Hutta v0.3.0")\nprint(f"Python {sys.version.split()[0]} on {sys.platform}")\nprint("Death Legion Team \u2014 better than all notebooks")\n\n# State persists across cells:\nx = 6\ny = 7\n',
+    stableId("welcome"),
   ),
   makeCell(
     "code",
     '# This cell reuses `x` and `y` from the previous cell.\nprint(f"x * y = {x * y}")\n\n# Try editing me and pressing Shift+Enter!\n',
+    stableId("welcome"),
   ),
   makeCell(
     "markdown",
     "## Try the AI assistant\n\nPress **Ctrl+/** to open the AI side panel, or create a new cell starting with `%%ai`:\n\n```\n%%ai\nWrite a Python one-liner that returns the first 10 Fibonacci numbers.\n```\n\n## Save your work\n\nUse the **Export** button in the toolbar to download this notebook as a `.legion` file (or `.ipynb` for Jupyter). The **Import** button opens any `.legion` or `.ipynb` file from disk.\n",
+    stableId("welcome"),
   ),
 ];
 
@@ -161,6 +186,38 @@ interface NotebookStore extends NotebookState {
   commandPaletteOpen: boolean;
   toggleCommandPalette: (open?: boolean) => void;
 
+  // find & replace across all cells
+  findReplaceOpen: boolean;
+  toggleFindReplace: (open?: boolean) => void;
+  findInCells: (query: string, opts?: { caseSensitive?: boolean; regex?: boolean }) => Array<{ cellId: string; matches: number }>;
+  replaceInCells: (query: string, replacement: string, opts?: { caseSensitive?: boolean; regex?: boolean; all?: boolean }) => number;
+
+  // shortcuts help dialog
+  shortcutsHelpOpen: boolean;
+  toggleShortcutsHelp: (open?: boolean) => void;
+
+  // outline / TOC panel (markdown headers)
+  outlineOpen: boolean;
+  toggleOutlinePanel: (open?: boolean) => void;
+  jumpToCell: (cellId: string) => void;
+
+  // editor settings
+  wordWrap: boolean;
+  toggleWordWrap: (on?: boolean) => void;
+  lineNumbers: boolean;
+  toggleLineNumbers: (on?: boolean) => void;
+
+  // per-cell collapse (hide code, show output)
+  toggleCellCollapsed: (cellId: string) => void;
+  collapseAll: () => void;
+  expandAll: () => void;
+
+  // auto-save
+  autoSaveEnabled: boolean;
+  toggleAutoSave: (on?: boolean) => void;
+  dirty: boolean;
+  markDirty: () => void;
+
   // lifecycle
   init: () => Promise<void>;
   startKernel: (specName?: string, sandboxName?: string) => Promise<void>;
@@ -187,7 +244,7 @@ interface NotebookStore extends NotebookState {
 }
 
 export const useNotebookStore = create<NotebookStore>((set, get) => ({
-  id: newId(),
+  id: stableId("notebook"),
   title: "legion-hutta.legion",
   cells: WELCOME_CELLS,
   kernelId: null,
@@ -214,6 +271,15 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   notebooksPanelOpen: false,
   currentNotebookId: null,
   isSaving: false,
+
+  // New v0.3.x UI state
+  findReplaceOpen: false,
+  shortcutsHelpOpen: false,
+  outlineOpen: false,
+  wordWrap: false,
+  lineNumbers: true,
+  autoSaveEnabled: true,
+  dirty: false,
 
   commandPaletteOpen: false,
 
@@ -338,6 +404,109 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
 
   toggleCommandPalette: (open) =>
     set((s) => ({ commandPaletteOpen: open ?? !s.commandPaletteOpen })),
+
+  toggleFindReplace: (open) =>
+    set((s) => ({ findReplaceOpen: open ?? !s.findReplaceOpen })),
+
+  toggleShortcutsHelp: (open) =>
+    set((s) => ({ shortcutsHelpOpen: open ?? !s.shortcutsHelpOpen })),
+
+  toggleOutlinePanel: (open) =>
+    set((s) => ({ outlineOpen: open ?? !s.outlineOpen })),
+
+  toggleWordWrap: (on) =>
+    set((s) => ({ wordWrap: on ?? !s.wordWrap })),
+
+  toggleLineNumbers: (on) =>
+    set((s) => ({ lineNumbers: on ?? !s.lineNumbers })),
+
+  toggleAutoSave: (on) =>
+    set((s) => ({ autoSaveEnabled: on ?? !s.autoSaveEnabled })),
+
+  markDirty: () => set({ dirty: true }),
+
+  jumpToCell: (cellId) => {
+    set({ activeCellId: cellId });
+    // Scroll into view on next paint
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-cell-id="${cellId}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    }
+  },
+
+  toggleCellCollapsed: (cellId) => {
+    set((s) => ({
+      cells: s.cells.map((c) =>
+        c.id === cellId ? { ...c, collapsed: !c.collapsed } : c,
+      ),
+    }));
+  },
+
+  collapseAll: () =>
+    set((s) => ({
+      cells: s.cells.map((c) => (c.kind === "code" ? { ...c, collapsed: true } : c)),
+    })),
+
+  expandAll: () =>
+    set((s) => ({
+      cells: s.cells.map((c) => ({ ...c, collapsed: false })),
+    })),
+
+  findInCells: (query, opts = {}) => {
+    if (!query) return [];
+    const { caseSensitive = false, regex = false } = opts;
+    let matcher: RegExp;
+    try {
+      if (regex) {
+        matcher = new RegExp(query, caseSensitive ? "g" : "gi");
+      } else {
+        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        matcher = new RegExp(escaped, caseSensitive ? "g" : "gi");
+      }
+    } catch {
+      return [];
+    }
+    return get().cells
+      .map((c) => {
+        const matches = (c.source.match(matcher) || []).length;
+        return matches > 0 ? { cellId: c.id, matches } : null;
+      })
+      .filter((x): x is { cellId: string; matches: number } => x !== null);
+  },
+
+  replaceInCells: (query, replacement, opts = {}) => {
+    if (!query) return 0;
+    const { caseSensitive = false, regex = false, all = true } = opts;
+    let matcher: RegExp;
+    try {
+      if (regex) {
+        matcher = new RegExp(query, caseSensitive ? "g" : "gi");
+      } else {
+        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        matcher = new RegExp(escaped, caseSensitive ? "g" : "gi");
+      }
+    } catch {
+      return 0;
+    }
+    let totalReplacements = 0;
+    set((s) => ({
+      cells: s.cells.map((c) => {
+        if (!all && totalReplacements > 0) return c;
+        if (!c.source.match(matcher)) return c;
+        const newSource = c.source.replace(matcher, (match) => {
+          totalReplacements += 1;
+          return replacement;
+        });
+        return { ...c, source: newSource };
+      }),
+      dirty: true,
+    }));
+    return totalReplacements;
+  },
 
   toggleNotebooksPanel: (open) => {
     set((s) => ({ notebooksPanelOpen: open ?? !s.notebooksPanelOpen }));
@@ -487,7 +656,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
         id = data.notebook.id;
         set({ currentNotebookId: id });
       }
-      set({ isSaving: false, error: null });
+      set({ isSaving: false, error: null, dirty: false });
       void get().refreshNotebooksList();
     } catch (err) {
       set({
@@ -512,7 +681,13 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       };
       const nb = data.notebook;
       // Re-id cells so React keys are stable
-      const cells = nb.cells.map((c) => ({ ...c, id: newId(), isRunning: false }));
+      const cells = nb.cells.map((c) => ({
+        ...c,
+        id: newId(),
+        isRunning: false,
+        executionTimeMs: c.executionTimeMs ?? null,
+        collapsed: c.collapsed ?? false,
+      }));
       set({
         currentNotebookId: nb.id,
         title: nb.title,
@@ -660,6 +835,8 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       isRunning: false,
       hasError: c.outputs.some((o) => o.type === "error"),
       errorSummary: null,
+      executionTimeMs: null,
+      collapsed: false,
     }));
     const title = doc.metadata.title || "untitled.legion";
     set({
@@ -677,6 +854,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       kernelStatus: null,
       variables: [],
       error: null,
+      dirty: false,
     });
     // Start a fresh kernel matching the document's sandbox + kernel spec
     // (best-effort — fall back to defaults if missing).
@@ -739,6 +917,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   setCellSource: (cellId, source) => {
     set((s) => ({
       cells: s.cells.map((c) => (c.id === cellId ? { ...c, source } : c)),
+      dirty: true,
     }));
   },
 
@@ -777,7 +956,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
     set((s) => ({
       cells: s.cells.map((c) =>
         c.id === cellId
-          ? { ...c, isRunning: true, outputs: [], hasError: false, errorSummary: null }
+          ? { ...c, isRunning: true, outputs: [], hasError: false, errorSummary: null, executionTimeMs: null }
           : c,
       ),
       kernelStatus: "busy",
@@ -785,6 +964,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
 
     const controller = new AbortController();
     activeExecutionController = controller;
+    const startedAt = performance.now();
 
     try {
       let finalCount: number | null = null;
@@ -817,6 +997,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
         }
       }
 
+      const elapsed = performance.now() - startedAt;
       set((s) => ({
         cells: s.cells.map((c) =>
           c.id === cellId
@@ -826,6 +1007,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
                 executionCount: finalCount ?? c.executionCount,
                 hasError: !success,
                 errorSummary,
+                executionTimeMs: elapsed,
               }
             : c,
         ),
@@ -837,6 +1019,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Execution failed";
+      const elapsed = performance.now() - startedAt;
       set((s) => ({
         cells: s.cells.map((c) =>
           c.id === cellId
@@ -845,6 +1028,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
                 isRunning: false,
                 hasError: true,
                 errorSummary: { name: "ExecutionError", value: message, traceback: [] },
+                executionTimeMs: elapsed,
               }
             : c,
         ),

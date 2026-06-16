@@ -26,6 +26,8 @@ interface CodeEditorProps {
   readOnly?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
+  wordWrap?: boolean;
+  lineNumbers?: boolean;
 }
 
 export function CodeEditor({
@@ -36,6 +38,8 @@ export function CodeEditor({
   readOnly,
   autoFocus,
   placeholder,
+  wordWrap = false,
+  lineNumbers = true,
 }: CodeEditorProps) {
   const { resolvedTheme } = useTheme();
   // useSyncExternalStore is the React-blessed way to detect "are we
@@ -77,7 +81,7 @@ export function CodeEditor({
         theme={isDark ? oneDark : "light"}
         extensions={[
           python(),
-          EditorView.lineWrapping,
+          ...(wordWrap ? [EditorView.lineWrapping] : []),
           EditorView.theme({
             "&": {
               fontSize: "13.5px",
@@ -114,7 +118,7 @@ export function CodeEditor({
         autoFocus={autoFocus}
         placeholder={placeholder}
         basicSetup={{
-          lineNumbers: true,
+          lineNumbers,
           highlightActiveLine: true,
           highlightActiveLineGutter: true,
           bracketMatching: true,

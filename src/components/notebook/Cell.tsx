@@ -8,6 +8,8 @@
  *  - an editor area (code or markdown)
  *  - an output area (code cells only)
  *  - a hover toolbar with cell actions (run, move up/down, delete, etc.)
+ *  - a collapse toggle (code cells only — hides the editor, shows output)
+ *  - an execution-time badge (code cells only — shown after a run)
  *
  * Cells are clickable to set active; the active cell is highlighted
  * with a border accent.
@@ -19,6 +21,7 @@ import {
   Square,
   ChevronUp,
   ChevronDown,
+  ChevronRight,
   Trash2,
   Plus,
   Code2,
@@ -26,6 +29,7 @@ import {
   CircleDot,
   Bot,
   Bug,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -46,6 +50,16 @@ interface CellProps {
   index: number;
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1) return "<1ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(s < 10 ? 2 : 1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s - m * 60);
+  return `${m}m${rem}s`;
+}
+
 export function Cell({ cell, index }: CellProps) {
   const activeCellId = useNotebookStore((s) => s.activeCellId);
   const setCellSource = useNotebookStore((s) => s.setCellSource);
@@ -58,8 +72,10 @@ export function Cell({ cell, index }: CellProps) {
   const clearCellOutput = useNotebookStore((s) => s.clearCellOutput);
   const explainCell = useNotebookStore((s) => s.explainCell);
   const fixCell = useNotebookStore((s) => s.fixCell);
-  const runAll = useNotebookStore((s) => s.runAll);
-  void runAll; // referenced in keyboard hints only
+  const toggleCellCollapsed = useNotebookStore((s) => s.toggleCellCollapsed);
+  const wordWrap = useNotebookStore((s) => s.wordWrap);
+  const lineNumbers = useNotebookStore((s) => s.lineNumbers);
+  void useNotebookStore((s) => s.runAll); // referenced in keyboard hints only
 
   const isActive = activeCellId === cell.id;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -84,6 +100,8 @@ export function Cell({ cell, index }: CellProps) {
     addCell(cell.id, "code");
   };
 
+  const isCollapsedCode = cell.kind === "code" && cell.collapsed;
+
   return (
     <div
       ref={containerRef}
@@ -96,18 +114,45 @@ export function Cell({ cell, index }: CellProps) {
       )}
       onClick={() => setActiveCell(cell.id)}
     >
-      {/* Left gutter: execution count or markdown icon */}
-      <div className="absolute left-0 top-0 flex h-full w-10 flex-col items-center justify-start gap-1 pt-3 text-[10px] text-muted-foreground">
+      {/* Left gutter: execution count or markdown icon, with collapse chevron for code */}
+      <div className="absolute left-0 top-0 flex h-full w-10 flex-col items-center justify-start gap-1 pt-2.5 text-[10px] text-muted-foreground">
         {cell.kind === "code" ? (
-          <span
-            className={cn(
-              "font-mono",
-              cell.isRunning ? "text-amber-500" : cell.executionCount !== null ? "text-foreground/70" : "text-muted-foreground/40",
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleCellCollapsed(cell.id);
+              }}
+              className="flex h-4 w-4 items-center justify-center text-muted-foreground/70 hover:text-foreground"
+              title={cell.collapsed ? "Expand code" : "Collapse code (output only)"}
+              aria-label={cell.collapsed ? "Expand code" : "Collapse code"}
+            >
+              <ChevronRight
+                className={cn(
+                  "h-3 w-3 transition-transform",
+                  !cell.collapsed && "rotate-90",
+                )}
+              />
+            </button>
+            <span
+              className={cn(
+                "font-mono",
+                cell.isRunning ? "text-amber-500" : cell.executionCount !== null ? "text-foreground/70" : "text-muted-foreground/40",
+              )}
+              title={`Execution #${cell.executionCount ?? "—"}`}
+            >
+              [{cell.isRunning ? "*" : cell.executionCount ?? " "}]
+            </span>
+            {cell.executionTimeMs !== null && !cell.isRunning && (
+              <span
+                className="mt-0.5 hidden font-mono text-[9px] text-muted-foreground/60 sm:block"
+                title={`Last run: ${formatDuration(cell.executionTimeMs)}`}
+              >
+                {formatDuration(cell.executionTimeMs)}
+              </span>
             )}
-            title={`Execution #${cell.executionCount ?? "—"}`}
-          >
-            [{cell.isRunning ? "*" : cell.executionCount ?? " "}]
-          </span>
+          </>
         ) : (
           <FileText className="mt-1 h-3 w-3 text-muted-foreground/60" />
         )}
@@ -245,15 +290,32 @@ export function Cell({ cell, index }: CellProps) {
       <div className="ml-10 pl-2 pr-2">
         {cell.kind === "code" ? (
           <>
-            <CodeEditor
-              value={cell.source}
-              onChange={(v) => setCellSource(cell.id, v)}
-              onRun={onRun}
-              onRunAndInsert={onRunAndInsert}
-              autoFocus={isActive}
-              placeholder="# Type Python code here…"
-            />
+            {!isCollapsedCode && (
+              <CodeEditor
+                value={cell.source}
+                onChange={(v) => setCellSource(cell.id, v)}
+                onRun={onRun}
+                onRunAndInsert={onRunAndInsert}
+                autoFocus={isActive}
+                placeholder="# Type Python code here…"
+                wordWrap={wordWrap}
+                lineNumbers={lineNumbers}
+              />
+            )}
+            {isCollapsedCode && cell.outputs.length === 0 && !cell.isRunning && (
+              <div className="flex items-center gap-2 py-3 text-[11.5px] italic text-muted-foreground/70">
+                <ChevronRight className="h-3 w-3" />
+                Code hidden — click the chevron to expand
+              </div>
+            )}
             <OutputArea cell={cell} />
+            {/* Subtle execution-time footer for collapsed cells (where gutter is hidden) */}
+            {isCollapsedCode && cell.executionTimeMs !== null && !cell.isRunning && (
+              <div className="flex items-center gap-1 pb-1.5 pt-0.5 text-[10px] text-muted-foreground/60">
+                <Clock className="h-2.5 w-2.5" />
+                <span className="font-mono">{formatDuration(cell.executionTimeMs)}</span>
+              </div>
+            )}
           </>
         ) : (
           <div className="py-3">

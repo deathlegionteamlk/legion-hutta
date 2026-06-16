@@ -7,10 +7,12 @@
  *  - Add code/markdown cells
  *  - Run cell / Run all
  *  - Interrupt / Restart kernel
- *  - Open AI / Variables / Notebooks panels
+ *  - Open AI / Variables / Outline / Find&Replace panels
  *  - Save / Open / New notebook
- *  - Toggle theme
- *  - Switch sandbox
+ *  - Export .legion / .ipynb; import file
+ *  - Toggle theme, word wrap, line numbers, auto-save
+ *  - Collapse / expand all cells
+ *  - Show shortcuts help
  *
  * Pressing Escape or selecting an item closes the palette.
  */
@@ -30,6 +32,18 @@ import {
   Moon,
   Cpu,
   Keyboard,
+  List,
+  Search,
+  Download,
+  Upload,
+  FileJson,
+  FileCode2,
+  WrapText,
+  ListOrdered,
+  AlignJustify,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  HelpCircle,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import {
@@ -77,6 +91,18 @@ export function CommandPalette() {
           <CommandItem onSelect={() => run(() => store.runAll())}>
             <Play className="mr-2 h-4 w-4" />
             Run all cells
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.toggleCellCollapsed(store.activeCellId))}>
+            <Code2 className="mr-2 h-4 w-4" />
+            Toggle collapse on active cell
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.collapseAll())}>
+            <ChevronsDownUp className="mr-2 h-4 w-4" />
+            Collapse all code cells
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.expandAll())}>
+            <ChevronsUpDown className="mr-2 h-4 w-4" />
+            Expand all cells
           </CommandItem>
         </CommandGroup>
 
@@ -144,6 +170,23 @@ export function CommandPalette() {
 
         <CommandSeparator />
 
+        <CommandGroup heading="File format">
+          <CommandItem onSelect={() => run(() => store.exportLegion())}>
+            <FileJson className="mr-2 h-4 w-4" />
+            Export as .legion (native)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.exportIpynb())}>
+            <FileCode2 className="mr-2 h-4 w-4" />
+            Export as .ipynb (Jupyter)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.importFromFile())}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import .legion or .ipynb…
+          </CommandItem>
+        </CommandGroup>
+
+        <CommandSeparator />
+
         <CommandGroup heading="Panels">
           <CommandItem onSelect={() => run(() => store.toggleVariablesPanel(true))}>
             <Variable className="mr-2 h-4 w-4" />
@@ -152,6 +195,31 @@ export function CommandPalette() {
           <CommandItem onSelect={() => run(() => store.toggleAiPanel(true))}>
             <Bot className="mr-2 h-4 w-4" />
             Show AI assistant
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleOutlinePanel(true))}>
+            <List className="mr-2 h-4 w-4" />
+            Show outline / TOC
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleFindReplace(true))}>
+            <Search className="mr-2 h-4 w-4" />
+            Find &amp; replace…
+          </CommandItem>
+        </CommandGroup>
+
+        <CommandSeparator />
+
+        <CommandGroup heading="Editor settings">
+          <CommandItem onSelect={() => run(() => store.toggleWordWrap())}>
+            <WrapText className="mr-2 h-4 w-4" />
+            Toggle word wrap {store.wordWrap ? "(on)" : "(off)"}
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleLineNumbers())}>
+            <ListOrdered className="mr-2 h-4 w-4" />
+            Toggle line numbers {store.lineNumbers ? "(on)" : "(off)"}
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleAutoSave())}>
+            <AlignJustify className="mr-2 h-4 w-4" />
+            Toggle auto-save {store.autoSaveEnabled ? "(on)" : "(off)"}
           </CommandItem>
         </CommandGroup>
 
@@ -171,9 +239,17 @@ export function CommandPalette() {
         <CommandSeparator />
 
         <CommandGroup heading="Help">
-          <CommandItem onSelect={() => run(() => window.open("/api/docs", "_blank"))}>
+          <CommandItem onSelect={() => run(() => store.toggleShortcutsHelp(true))}>
             <Keyboard className="mr-2 h-4 w-4" />
+            Keyboard shortcuts
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => window.open("/api/docs", "_blank"))}>
+            <HelpCircle className="mr-2 h-4 w-4" />
             API documentation
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.exportLegion())}>
+            <Download className="mr-2 h-4 w-4" />
+            Download current notebook
           </CommandItem>
         </CommandGroup>
       </CommandList>

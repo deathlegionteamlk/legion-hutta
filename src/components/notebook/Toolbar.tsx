@@ -36,6 +36,9 @@ import {
   Upload,
   FileJson,
   FileCode2,
+  List,
+  Search,
+  WrapText,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -79,12 +82,18 @@ export function Toolbar() {
   const toggleVariablesPanel = useNotebookStore((s) => s.toggleVariablesPanel);
   const toggleNotebooksPanel = useNotebookStore((s) => s.toggleNotebooksPanel);
   const toggleCommandPalette = useNotebookStore((s) => s.toggleCommandPalette);
+  const toggleOutlinePanel = useNotebookStore((s) => s.toggleOutlinePanel);
+  const toggleFindReplace = useNotebookStore((s) => s.toggleFindReplace);
+  const toggleWordWrap = useNotebookStore((s) => s.toggleWordWrap);
   const saveCurrentNotebook = useNotebookStore((s) => s.saveCurrentNotebook);
   const exportLegion = useNotebookStore((s) => s.exportLegion);
   const exportIpynb = useNotebookStore((s) => s.exportIpynb);
   const importFromFile = useNotebookStore((s) => s.importFromFile);
   const aiPanelOpen = useNotebookStore((s) => s.aiPanelOpen);
   const variablesPanelOpen = useNotebookStore((s) => s.variablesPanelOpen);
+  const outlineOpen = useNotebookStore((s) => s.outlineOpen);
+  const wordWrap = useNotebookStore((s) => s.wordWrap);
+  const dirty = useNotebookStore((s) => s.dirty);
 
   const { setTheme } = useTheme();
 
@@ -213,6 +222,23 @@ export function Toolbar() {
 
             <div className="mx-0.5 hidden h-6 w-px bg-border/60 sm:block" />
 
+            {/* Outline panel */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className={cn("h-8 w-8", outlineOpen && "bg-accent text-accent-foreground")}
+                  onClick={() => toggleOutlinePanel()}
+                >
+                  <List className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px]">
+                Outline / TOC (Ctrl+Shift+O)
+              </TooltipContent>
+            </Tooltip>
+
             {/* Variables panel */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -226,7 +252,41 @@ export function Toolbar() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-[11px]">
-                Variables inspector
+                Variables inspector (Ctrl+Shift+V)
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Find & replace */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  onClick={() => toggleFindReplace()}
+                >
+                  <Search className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px]">
+                Find &amp; replace (Ctrl+H)
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Word wrap toggle */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className={cn("h-8 w-8", wordWrap && "bg-accent text-accent-foreground")}
+                  onClick={() => toggleWordWrap()}
+                >
+                  <WrapText className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px]">
+                Toggle word wrap
               </TooltipContent>
             </Tooltip>
 
@@ -250,13 +310,13 @@ export function Toolbar() {
               </TooltipContent>
             </Tooltip>
 
-            {/* Save notebook */}
+            {/* Save notebook (with dirty indicator) */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8"
+                  className="relative h-8 w-8"
                   onClick={() => saveCurrentNotebook()}
                   disabled={isSaving}
                 >
@@ -265,10 +325,13 @@ export function Toolbar() {
                   ) : (
                     <Save className="h-3.5 w-3.5" />
                   )}
+                  {dirty && !isSaving && (
+                    <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
+                  )}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-[11px]">
-                Save notebook to disk
+                {dirty ? "Save notebook (unsaved changes)" : "Save notebook to disk (Ctrl+S)"}
               </TooltipContent>
             </Tooltip>
 
