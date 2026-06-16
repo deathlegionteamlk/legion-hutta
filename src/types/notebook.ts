@@ -1,0 +1,95 @@
+/**
+ * Shared types for the Legion Hutta notebook frontend.
+ *
+ * These mirror the shape of the FastAPI backend responses so the API
+ * client and UI components agree on a single source of truth.
+ */
+
+export type KernelStatus =
+  | "starting"
+  | "idle"
+  | "busy"
+  | "interrupted"
+  | "dead";
+
+export type OutputType =
+  | "stdout"
+  | "stderr"
+  | "result"
+  | "error"
+  | "status";
+
+export interface KernelSpec {
+  name: string;
+  display_name: string;
+  language: string;
+  file_extension: string;
+  codemirror_mode: string;
+  description: string;
+}
+
+export interface KernelspecsResponse {
+  default: string | null;
+  kernelspecs: Record<string, KernelSpec>;
+}
+
+export interface KernelInfo {
+  kernel_id: string;
+  status: KernelStatus;
+  execution_count: number;
+  created_at: number;
+  last_activity: number;
+  spec: KernelSpec;
+}
+
+export interface OutputChunk {
+  type: OutputType;
+  text: string;
+  data: Record<string, unknown>;
+  timestamp: number;
+}
+
+export interface ExecutionResult {
+  success: boolean;
+  outputs: OutputChunk[];
+  error_name: string | null;
+  error_value: string | null;
+  traceback: string[];
+  execution_count: number;
+}
+
+/**
+ * Frontend-only model of a notebook cell.
+ * Cells live entirely in the browser; the backend only sees code
+ * snippets when the user runs a cell.
+ */
+export type CellKind = "code" | "markdown";
+
+export interface CellModel {
+  id: string;
+  kind: CellKind;
+  /** Source text of the cell. */
+  source: string;
+  /** Outputs from the most recent execution (code cells only). */
+  outputs: OutputChunk[];
+  /** Execution count assigned by the kernel, or null if never run. */
+  executionCount: number | null;
+  /** True while the cell is awaiting execution results. */
+  isRunning: boolean;
+  /** True if the last execution produced an error. */
+  hasError: boolean;
+  /** Cached error summary for display. */
+  errorSummary: { name: string; value: string; traceback: string[] } | null;
+}
+
+export interface NotebookState {
+  id: string;
+  title: string;
+  cells: CellModel[];
+  /** The kernel attached to this notebook. A notebook has exactly one. */
+  kernelId: string | null;
+  kernelStatus: KernelStatus | null;
+  kernelSpec: KernelSpec | null;
+  /** Active cell, used for keyboard shortcuts. */
+  activeCellId: string | null;
+}
