@@ -44,6 +44,11 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   HelpCircle,
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  Merge,
+  Maximize2,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import {
@@ -103,6 +108,31 @@ export function CommandPalette() {
           <CommandItem onSelect={() => run(() => store.expandAll())}>
             <ChevronsUpDown className="mr-2 h-4 w-4" />
             Expand all cells
+          </CommandItem>
+          <CommandSeparator />
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.copyCell(store.activeCellId))}>
+            <Copy className="mr-2 h-4 w-4" />
+            Copy active cell (Shift+C)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.cutCell(store.activeCellId))}>
+            <Scissors className="mr-2 h-4 w-4" />
+            Cut active cell (Shift+X)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.pasteCell(store.activeCellId))}>
+            <ClipboardPaste className="mr-2 h-4 w-4" />
+            Paste cell below (Shift+V)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.duplicateCell(store.activeCellId))}>
+            <Copy className="mr-2 h-4 w-4 opacity-60" />
+            Duplicate active cell (Shift+D)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.mergeCellDown(store.activeCellId))}>
+            <Merge className="mr-2 h-4 w-4" />
+            Merge with cell below (Shift+M)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleFocusMode())}>
+            <Maximize2 className="mr-2 h-4 w-4" />
+            Toggle focus mode (F)
           </CommandItem>
         </CommandGroup>
 

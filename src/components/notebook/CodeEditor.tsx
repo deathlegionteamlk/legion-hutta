@@ -23,6 +23,7 @@ interface CodeEditorProps {
   onChange: (value: string) => void;
   onRun?: () => void;
   onRunAndInsert?: () => void;
+  onSplit?: (position: number) => void;
   readOnly?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
@@ -35,6 +36,7 @@ export function CodeEditor({
   onChange,
   onRun,
   onRunAndInsert,
+  onSplit,
   readOnly,
   autoFocus,
   placeholder,
@@ -54,23 +56,34 @@ export function CodeEditor({
   // neutral theme to avoid hydration mismatches.
   const isDark = isMounted && resolvedTheme === "dark";
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      // CodeMirror handles indentation, autocomplete, etc. We only
-      // intercept the run shortcuts.
-      if (e.key === "Enter" && (e.shiftKey || e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
+  // Split-cell shortcut: Ctrl+Shift+- (or Cmd+Shift+-).
+  // The handler reads the cursor position from the EditorView that
+  // CodeMirror passes as the second argument to domEventHandlers callbacks.
+  // No refs needed — all values are captured in the deps array.
+  const domKeydown = useCallback(
+    (e: Event, view: EditorView) => {
+      const ke = e as KeyboardEvent;
+      // Run shortcuts
+      if (ke.key === "Enter" && (ke.shiftKey || ke.ctrlKey || ke.metaKey)) {
+        ke.preventDefault();
         onRun?.();
         return false;
       }
-      if (e.key === "Enter" && e.altKey) {
-        e.preventDefault();
+      if (ke.key === "Enter" && ke.altKey) {
+        ke.preventDefault();
         onRunAndInsert?.();
+        return false;
+      }
+      // Ctrl+Shift+- -> split at cursor
+      if ((ke.ctrlKey || ke.metaKey) && ke.shiftKey && (ke.key === "-" || ke.key === "_")) {
+        const pos = view.state.selection.main.head;
+        ke.preventDefault();
+        onSplit?.(pos);
         return false;
       }
       return true;
     },
-    [onRun, onRunAndInsert],
+    [onRun, onRunAndInsert, onSplit],
   );
 
   return (
@@ -111,7 +124,7 @@ export function CodeEditor({
             },
           }),
           EditorView.domEventHandlers({
-            keydown: handleKeyDown as unknown as (e: Event) => boolean,
+            keydown: domKeydown as unknown as (e: Event, view: EditorView) => boolean,
           }),
         ]}
         readOnly={readOnly}

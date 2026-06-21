@@ -15,7 +15,7 @@
  * with a border accent.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Play,
   Square,
@@ -30,6 +30,11 @@ import {
   Bot,
   Bug,
   Clock,
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  Merge,
+  GripVertical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -60,8 +65,14 @@ function formatDuration(ms: number): string {
   return `${m}m${rem}s`;
 }
 
+// ---- Drag & drop (v0.4) ----
+// We use the native HTML5 DnD API. Each cell is draggable via its left
+// gutter handle. The store's moveCellTo action performs the actual reorder.
+let _draggedCellId: string | null = null;
+
 export function Cell({ cell, index }: CellProps) {
   const activeCellId = useNotebookStore((s) => s.activeCellId);
+  const cellsLength = useNotebookStore((s) => s.cells.length);
   const setCellSource = useNotebookStore((s) => s.setCellSource);
   const setActiveCell = useNotebookStore((s) => s.setActiveCell);
   const runCell = useNotebookStore((s) => s.runCell);
@@ -73,12 +84,20 @@ export function Cell({ cell, index }: CellProps) {
   const explainCell = useNotebookStore((s) => s.explainCell);
   const fixCell = useNotebookStore((s) => s.fixCell);
   const toggleCellCollapsed = useNotebookStore((s) => s.toggleCellCollapsed);
+  const copyCell = useNotebookStore((s) => s.copyCell);
+  const cutCell = useNotebookStore((s) => s.cutCell);
+  const pasteCell = useNotebookStore((s) => s.pasteCell);
+  const duplicateCell = useNotebookStore((s) => s.duplicateCell);
+  const mergeCellDown = useNotebookStore((s) => s.mergeCellDown);
+  const moveCellTo = useNotebookStore((s) => s.moveCellTo);
+  const splitCell = useNotebookStore((s) => s.splitCell);
   const wordWrap = useNotebookStore((s) => s.wordWrap);
   const lineNumbers = useNotebookStore((s) => s.lineNumbers);
   void useNotebookStore((s) => s.runAll); // referenced in keyboard hints only
 
   const isActive = activeCellId === cell.id;
   const containerRef = useRef<HTMLDivElement>(null);
+  const [dragOver, setDragOver] = useState<"before" | "after" | null>(null);
 
   // Scroll the cell into view when it becomes active via keyboard nav.
   useEffect(() => {
@@ -102,20 +121,69 @@ export function Cell({ cell, index }: CellProps) {
 
   const isCollapsedCode = cell.kind === "code" && cell.collapsed;
 
+  // ---- DnD handlers ----
+  const onDragStart = (e: React.DragEvent) => {
+    _draggedCellId = cell.id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", cell.id);
+  };
+  const onDragEnd = () => {
+    _draggedCellId = null;
+    setDragOver(null);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!_draggedCellId || _draggedCellId === cell.id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const midpoint = rect.top + rect.height / 2;
+    setDragOver(e.clientY < midpoint ? "before" : "after");
+  };
+  const onDragLeave = () => setDragOver(null);
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const sourceId = _draggedCellId;
+    setDragOver(null);
+    if (!sourceId || sourceId === cell.id) return;
+    moveCellTo(sourceId, cell.id, dragOver ?? "before");
+    _draggedCellId = null;
+  };
+
   return (
     <div
       ref={containerRef}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       className={cn(
         "group relative rounded-lg border bg-card transition-all",
         isActive
           ? "border-primary/40 ring-1 ring-primary/20 shadow-sm"
           : "border-border/60 hover:border-border",
         cell.hasError && "border-red-400/50",
+        dragOver === "before" && "ring-2 ring-primary/40 ring-t-2",
+        dragOver === "after" && "ring-2 ring-primary/40 ring-b-2",
       )}
       onClick={() => setActiveCell(cell.id)}
     >
+      {/* Drop indicator lines */}
+      {dragOver === "before" && (
+        <div className="absolute -top-px left-0 right-0 h-0.5 bg-primary/70" />
+      )}
+      {dragOver === "after" && (
+        <div className="absolute -bottom-px left-0 right-0 h-0.5 bg-primary/70" />
+      )}
       {/* Left gutter: execution count or markdown icon, with collapse chevron for code */}
       <div className="absolute left-0 top-0 flex h-full w-10 flex-col items-center justify-start gap-1 pt-2.5 text-[10px] text-muted-foreground">
+        {/* Drag handle — appears on hover, hints that the cell is draggable */}
+        <GripVertical
+          className="pointer-events-none absolute -left-0.5 top-1 h-3 w-3 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/40"
+          aria-hidden
+        />
         {cell.kind === "code" ? (
           <>
             <button
@@ -248,6 +316,65 @@ export function Cell({ cell, index }: CellProps) {
 
           <div className="mx-0.5 h-4 w-px bg-border/60" />
 
+          {/* v0.4: clipboard + split/merge */}
+          <CellTooltip label="Duplicate cell (Shift+D)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => duplicateCell(cell.id)}
+            >
+              <Copy className="h-3 w-3" />
+            </Button>
+          </CellTooltip>
+
+          <CellTooltip label="Copy cell (Shift+C)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => copyCell(cell.id)}
+            >
+              <Copy className="h-3 w-3 opacity-50" />
+            </Button>
+          </CellTooltip>
+
+          <CellTooltip label="Cut cell (Shift+X)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => cutCell(cell.id)}
+            >
+              <Scissors className="h-3 w-3" />
+            </Button>
+          </CellTooltip>
+
+          <CellTooltip label="Paste below (Shift+V)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => pasteCell(cell.id)}
+            >
+              <ClipboardPaste className="h-3 w-3" />
+            </Button>
+          </CellTooltip>
+
+          <CellTooltip label="Merge with cell below (Shift+M)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => mergeCellDown(cell.id)}
+              disabled={index === cellsLength - 1}
+            >
+              <Merge className="h-3 w-3" />
+            </Button>
+          </CellTooltip>
+
+          <div className="mx-0.5 h-4 w-px bg-border/60" />
+
           {cell.kind === "code" && (
             <CellTooltip label="Explain with AI">
               <Button
@@ -296,6 +423,7 @@ export function Cell({ cell, index }: CellProps) {
                 onChange={(v) => setCellSource(cell.id, v)}
                 onRun={onRun}
                 onRunAndInsert={onRunAndInsert}
+                onSplit={(pos) => splitCell(cell.id, pos)}
                 autoFocus={isActive}
                 placeholder="# Type Python code here…"
                 wordWrap={wordWrap}

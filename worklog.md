@@ -273,3 +273,71 @@ Stage Summary:
   - Find & Replace dialog opens with Ctrl+H and lists per-cell matches
   - Shortcuts help opens with `?`
 - TypeScript clean. ESLint clean. No console errors. Screenshot saved to `download/notebook-v0.3-features.png`.
+
+---
+Task ID: legion-hutta-v0.4
+Agent: main (Super Z)
+Task: v0.4 — add cell clipboard (copy/cut/paste/duplicate), split/merge, drag-and-drop reordering, status bar, focus mode, last-saved timestamp; verify build clean; prepare repo for GitHub upload (README, LICENSE, .gitignore).
+
+Work Log:
+- Verified the v0.3 hydration-mismatch fix (`stableId()` for `WELCOME_CELLS`) is in place — welcome cells use deterministic IDs (`welcome-0001`…`welcome-0004`), and `id: stableId("notebook")` for the notebook itself.
+- Extended `NotebookStore` interface with v0.4 fields + actions:
+  - `clipboard: { kind: CellKind; source: string } | null`
+  - `copyCell(cellId)`, `cutCell(cellId)`, `pasteCell(afterCellId?)`, `duplicateCell(cellId)`, `splitCell(cellId, position)`, `mergeCellDown(cellId)`, `moveCellTo(sourceId, targetId, "before"|"after")`
+  - `focusMode: boolean`, `toggleFocusMode(on?)`
+  - `lastSavedAt: number | null` (set on every successful save)
+- Implemented all new store actions with proper React-key stability (cells are spliced, not remapped, so unchanged cells keep their identity).
+- `splitCell` is boundary-aware: if the split point is mid-line, the trailing partial line is moved to the new cell. Trailing newlines on the first half are preserved; leading newlines on the second half are trimmed.
+- `mergeCellDown` preserves the richer of the two cells' output/error state and picks the merged kind (same-kind stays same; mixed becomes `code`).
+- Created `StatusBar.tsx` — bottom bar showing:
+  - Online/offline cloud icon
+  - Kernel status dot (color-coded by state) + spec + sandbox
+  - Cell counts (total / code / md)
+  - Source stats (lines + chars)
+  - Error count + running count (only when non-zero)
+  - Clipboard state (when something is copied/cut)
+  - Auto-save indicator (only when enabled)
+  - Dirty indicator + relative last-saved time ("just now", "5m ago", "2h ago")
+  - Focus mode toggle button
+- Added HTML5 native drag-and-drop to `Cell.tsx`:
+  - Each cell is `draggable`
+  - Module-level `_draggedCellId` tracks the source
+  - `onDragOver` computes whether the cursor is in the top or bottom half of the cell to decide `before`/`after` insertion
+  - Visual drop indicators (colored top/bottom border on the target cell)
+  - `GripVertical` icon in the gutter that appears on hover as a drag affordance
+- Updated `Cell.tsx` hover toolbar with 5 new buttons: Duplicate (Shift+D), Copy (Shift+C), Cut (Shift+X), Paste below (Shift+V), Merge with cell below (Shift+M). The merge button is disabled on the last cell.
+- Updated `CodeEditor.tsx`:
+  - Added `onSplit?: (position: number) => void` prop
+  - Intercepted `Ctrl+Shift+-` / `Cmd+Shift+-` in the CodeMirror keydown handler — reads the cursor position from the `EditorView` passed by `domEventHandlers` and calls `onSplit(pos)`.
+  - Refactored the keydown handler to use the `(event, view)` signature from `EditorView.domEventHandlers` (no refs needed).
+- Updated `Notebook.tsx`:
+  - Replaced the simple footer with the new `StatusBar` component
+  - Added 6 new keyboard shortcuts in command mode:
+    - `Shift+C` copy, `Shift+X` cut, `Shift+V` paste, `Shift+D` duplicate, `Shift+M` merge down
+    - `F` toggle focus mode
+  - The Shift+letter shortcuts are checked BEFORE the plain-letter bindings (so `Shift+C` doesn't fall through to the `C` collapse handler).
+  - Focus mode: narrows `max-w-5xl` → `max-w-3xl`, hides the "Add Cell" button + KeyboardHints, makes the StatusBar semi-transparent.
+  - Added `cn` import for conditional classnames
+  - Updated deps array of the keyboard handler useEffect with all new action callbacks
+  - Added `F` and the 5 Shift+letter shortcuts to the in-app KeyboardHints grid
+- Updated `ShortcutsHelp.tsx` modal with a new "Cell clipboard & editing (v0.4)" group containing all 7 new shortcuts.
+- Updated `CommandPalette.tsx` with 6 new commands (copy, cut, paste, duplicate, merge, focus mode) — added `Copy`, `Scissors`, `ClipboardPaste`, `Merge`, `Maximize2` icons.
+- Resolved a `react-hooks/refs` ESLint error in `CodeEditor.tsx` by removing the `viewRef` indirection and using the `view` argument that `EditorView.domEventHandlers` passes directly to its callbacks.
+- Updated `.gitignore` to exclude `tool-results/`, `upload/`, `download/`, `examples/`, `mini-services/`, `*.pid`, Python `__pycache__/` and virtualenvs, and the local SQLite `db/*.db`.
+- Wrote `README.md` (comprehensive: features, quick start, keyboard shortcuts, .legion format spec, architecture, project structure, tech stack, license).
+- Wrote `LICENSE` (MIT, "Death Legion Team").
+- Verified `npx tsc --noEmit` is clean for all `src/` files.
+- Verified `npx eslint src/components/notebook/ --max-warnings 0` is clean.
+- Verified `npx next build` succeeds — 4 static pages + 9 dynamic API routes generated.
+
+Stage Summary:
+- v0.4 ships 7 new feature areas on top of v0.3:
+  1. **Cell drag-and-drop reordering** — native HTML5 DnD with before/after drop indicators and a grip icon affordance in the gutter.
+  2. **Cell clipboard** — copy / cut / paste / duplicate via Shift+C / X / V / D, plus toolbar buttons and command palette entries.
+  3. **Cell split / merge** — `Ctrl+Shift+-` splits at the CodeMirror cursor (boundary-aware); `Shift+M` merges with the cell below (preserving the richer output/error state).
+  4. **Status bar** — at-a-glance view of kernel state, cell counts, source stats, error/running counts, clipboard state, auto-save, dirty + relative last-saved time, focus-mode toggle.
+  5. **Focus / presentation mode** — `F` collapses chrome and narrows the page for distraction-free editing.
+  6. **Last-saved timestamp** — persisted in the store, shown in the status bar with a relative formatter that re-renders every 15s.
+  7. **Repository hygiene** — README, LICENSE, expanded .gitignore.
+- TypeScript clean, ESLint clean, Next.js production build succeeds.
+- The hydration mismatch from the prior session was already fixed by the `stableId()` change in v0.3.1; verified the welcome cells now use IDs like `welcome-0001` (deterministic, identical on server and client).

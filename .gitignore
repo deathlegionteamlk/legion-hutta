@@ -52,3 +52,18 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Legion Hutta — additional ignores
+/tool-results/
+/upload/
+/download/
+/examples/
+/mini-services/
+*.pid
+python-backend/__pycache__/
+python-backend/**/__pycache__/
+python-backend/.venv/
+python-backend/venv/
+.prisma/
+db/*.db
+db/*.db-journal

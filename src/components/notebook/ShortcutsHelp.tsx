@@ -37,6 +37,18 @@ const GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: "Cell clipboard & editing (v0.4)",
+    items: [
+      { keys: "Shift+C", desc: "Copy the selected cell to the clipboard" },
+      { keys: "Shift+X", desc: "Cut the selected cell (copy + delete)" },
+      { keys: "Shift+V", desc: "Paste the clipboard cell below the selection" },
+      { keys: "Shift+D", desc: "Duplicate the selected cell" },
+      { keys: "Shift+M", desc: "Merge the selected cell with the one below" },
+      { keys: "Ctrl+Shift+-", desc: "Split the active cell at the cursor position" },
+      { keys: "Drag", desc: "Drag a cell by its left gutter to reorder" },
+    ],
+  },
+  {
     title: "Panels & palette",
     items: [
       { keys: "Ctrl+P", desc: "Command palette" },
@@ -44,6 +56,7 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Ctrl+Shift+V", desc: "Variables inspector panel" },
       { keys: "Ctrl+Shift+O", desc: "Outline / table of contents panel" },
       { keys: "Ctrl+H", desc: "Find & replace across all cells" },
+      { keys: "F", desc: "Toggle focus / presentation mode" },
       { keys: "?", desc: "This shortcuts dialog" },
     ],
   },

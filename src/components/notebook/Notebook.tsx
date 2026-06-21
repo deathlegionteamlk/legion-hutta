@@ -29,6 +29,7 @@
 
 import { useEffect } from "react";
 import { useNotebookStore } from "@/lib/notebook-store";
+import { cn } from "@/lib/utils";
 import { Toolbar } from "./Toolbar";
 import { Cell } from "./Cell";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ import { CommandPalette } from "./CommandPalette";
 import { Outline } from "./Outline";
 import { FindReplace } from "./FindReplace";
 import { ShortcutsHelp } from "./ShortcutsHelp";
+import { StatusBar } from "./StatusBar";
 
 export function Notebook() {
   const cells = useNotebookStore((s) => s.cells);
@@ -63,6 +65,14 @@ export function Notebook() {
   const aiPanelOpen = useNotebookStore((s) => s.aiPanelOpen);
   const variablesPanelOpen = useNotebookStore((s) => s.variablesPanelOpen);
   const outlineOpen = useNotebookStore((s) => s.outlineOpen);
+  const focusMode = useNotebookStore((s) => s.focusMode);
+  const toggleFocusMode = useNotebookStore((s) => s.toggleFocusMode);
+  const copyCell = useNotebookStore((s) => s.copyCell);
+  const cutCell = useNotebookStore((s) => s.cutCell);
+  const pasteCell = useNotebookStore((s) => s.pasteCell);
+  const duplicateCell = useNotebookStore((s) => s.duplicateCell);
+  const mergeCellDown = useNotebookStore((s) => s.mergeCellDown);
+  const splitCell = useNotebookStore((s) => s.splitCell);
 
   // Boot the backend connection + kernel on first mount.
   useEffect(() => {
@@ -145,6 +155,7 @@ export function Notebook() {
         if (s.findReplaceOpen) { toggleFindReplace(false); return; }
         if (s.shortcutsHelpOpen) { toggleShortcutsHelp(false); return; }
         if (s.commandPaletteOpen) { toggleCommandPalette(false); return; }
+        if (s.focusMode) { toggleFocusMode(false); return; }
         if (isTyping) (target as HTMLElement).blur();
         return;
       }
@@ -157,9 +168,47 @@ export function Notebook() {
         return;
       }
 
+      // F  -> toggle focus / presentation mode
+      if (!e.shiftKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        toggleFocusMode();
+        return;
+      }
+
       if (!activeCellId) return;
       const idx = cells.findIndex((c) => c.id === activeCellId);
       if (idx < 0) return;
+
+      // v0.4: Shift+<letter> clipboard + split/merge shortcuts.
+      // Must check these BEFORE the plain-letter bindings below.
+      if (e.shiftKey) {
+        const k = e.key.toUpperCase();
+        if (k === "C") {
+          e.preventDefault();
+          copyCell(activeCellId);
+          return;
+        }
+        if (k === "X") {
+          e.preventDefault();
+          cutCell(activeCellId);
+          return;
+        }
+        if (k === "V") {
+          e.preventDefault();
+          pasteCell(activeCellId);
+          return;
+        }
+        if (k === "D") {
+          e.preventDefault();
+          duplicateCell(activeCellId);
+          return;
+        }
+        if (k === "M") {
+          e.preventDefault();
+          if (idx < cells.length - 1) mergeCellDown(activeCellId);
+          return;
+        }
+      }
 
       if (e.key === "b" || e.key === "B") {
         e.preventDefault();
@@ -226,10 +275,16 @@ export function Notebook() {
     toggleFindReplace,
     toggleShortcutsHelp,
     toggleCellCollapsed,
+    toggleFocusMode,
     saveCurrentNotebook,
     exportLegion,
     exportIpynb,
     importFromFile,
+    copyCell,
+    cutCell,
+    pasteCell,
+    duplicateCell,
+    mergeCellDown,
   ]);
 
   // Compute padding for open side panels so content doesn't go under them.
@@ -243,9 +298,12 @@ export function Notebook() {
       <Outline />
 
       <main
-        className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 transition-[padding] duration-200"
+        className={cn(
+          "mx-auto w-full flex-1 px-4 py-6 transition-[padding] duration-200",
+          focusMode ? "max-w-3xl py-3" : "max-w-5xl",
+        )}
         style={{
-          paddingTop: "1.5rem",
+          paddingTop: focusMode ? "0.75rem" : "1.5rem",
           paddingLeft: `calc(${leftPad} + 1rem)`,
           paddingRight: `calc(${rightPad} + 1rem)`,
         }}
@@ -258,7 +316,7 @@ export function Notebook() {
           ))}
         </div>
 
-        <div className="mt-6 flex justify-center">
+        <div className={cn("mt-6 flex justify-center", focusMode && "hidden")}>
           <Button
             variant="outline"
             size="sm"
@@ -270,18 +328,10 @@ export function Notebook() {
           </Button>
         </div>
 
-        <KeyboardHints />
+        {!focusMode && <KeyboardHints />}
       </main>
 
-      <footer className="mt-auto border-t border-border/60 bg-muted/30 px-4 py-3">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span>
-            Legion Hutta v0.3.0 · by{" "}
-            <span className="font-medium text-foreground/80">Death Legion Team</span>
-          </span>
-          <span className="font-mono">better than all notebooks</span>
-        </div>
-      </footer>
+      <StatusBar />
 
       {/* Side panels */}
       <VariablesInspector />
@@ -313,9 +363,14 @@ function KeyboardHints() {
         <Hint k="B / A" desc="Insert cell below / above" />
         <Hint k="D D" desc="Delete cell" />
         <Hint k="C" desc="Collapse / expand cell" />
+        <Hint k="Shift+C / X / V" desc="Copy / cut / paste cell" />
+        <Hint k="Shift+D" desc="Duplicate cell" />
+        <Hint k="Shift+M" desc="Merge with cell below" />
+        <Hint k="Ctrl+Shift+-" desc="Split cell at cursor" />
         <Hint k="↑ / ↓" desc="Navigate cells" />
         <Hint k="Enter" desc="Edit cell" />
         <Hint k="Esc" desc="Exit edit / close dialog" />
+        <Hint k="F" desc="Toggle focus mode" />
         <Hint k="Ctrl+P" desc="Command palette" />
         <Hint k="Ctrl+/" desc="AI assistant" />
         <Hint k="Ctrl+Shift+V" desc="Variables inspector" />

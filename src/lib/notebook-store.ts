@@ -212,6 +212,23 @@ interface NotebookStore extends NotebookState {
   collapseAll: () => void;
   expandAll: () => void;
 
+  // cell clipboard (v0.4) — copy/cut/paste/duplicate/split/merge
+  clipboard: { kind: CellKind; source: string } | null;
+  copyCell: (cellId: string) => void;
+  cutCell: (cellId: string) => void;
+  pasteCell: (afterCellId?: string | null) => void;
+  duplicateCell: (cellId: string) => void;
+  splitCell: (cellId: string, position: number) => void;
+  mergeCellDown: (cellId: string) => void;
+  moveCellTo: (sourceId: string, targetId: string, position: "before" | "after") => void;
+
+  // focus / presentation mode (v0.4) — hides chrome, expands cells
+  focusMode: boolean;
+  toggleFocusMode: (on?: boolean) => void;
+
+  // last-saved timestamp (v0.4) — shown in the status bar
+  lastSavedAt: number | null;
+
   // auto-save
   autoSaveEnabled: boolean;
   toggleAutoSave: (on?: boolean) => void;
@@ -280,6 +297,11 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   lineNumbers: true,
   autoSaveEnabled: true,
   dirty: false,
+
+  // v0.4 state
+  clipboard: null,
+  focusMode: false,
+  lastSavedAt: null,
 
   commandPaletteOpen: false,
 
@@ -656,7 +678,7 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
         id = data.notebook.id;
         set({ currentNotebookId: id });
       }
-      set({ isSaving: false, error: null, dirty: false });
+      set({ isSaving: false, error: null, dirty: false, lastSavedAt: Date.now() });
       void get().refreshNotebooksList();
     } catch (err) {
       set({
@@ -942,6 +964,120 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       ),
     }));
   },
+
+  // ---- v0.4: cell clipboard, split/merge, drag-to-reorder, focus mode ----
+
+  copyCell: (cellId) => {
+    const cell = get().cells.find((c) => c.id === cellId);
+    if (!cell) return;
+    set({ clipboard: { kind: cell.kind, source: cell.source } });
+  },
+
+  cutCell: (cellId) => {
+    const cell = get().cells.find((c) => c.id === cellId);
+    if (!cell) return;
+    set({ clipboard: { kind: cell.kind, source: cell.source } });
+    get().removeCell(cellId);
+  },
+
+  pasteCell: (afterCellId) => {
+    const clip = get().clipboard;
+    if (!clip) return;
+    get().addCell(afterCellId ?? null, clip.kind, clip.source);
+  },
+
+  duplicateCell: (cellId) => {
+    const cell = get().cells.find((c) => c.id === cellId);
+    if (!cell) return;
+    const dup = makeCell(cell.kind, cell.source);
+    // Preserve execution metadata so a duplicated run-time cell looks the same
+    // (outputs are NOT copied — they're kernel-specific).
+    dup.executionCount = cell.executionCount;
+    dup.collapsed = cell.collapsed;
+    set((s) => {
+      const idx = s.cells.findIndex((c) => c.id === cellId);
+      if (idx < 0) return s;
+      const cells = [...s.cells];
+      cells.splice(idx + 1, 0, dup);
+      return { cells, activeCellId: dup.id, dirty: true };
+    });
+  },
+
+  splitCell: (cellId, position) => {
+    set((s) => {
+      const idx = s.cells.findIndex((c) => c.id === cellId);
+      if (idx < 0) return s;
+      const cell = s.cells[idx];
+      const src = cell.source;
+      const pos = Math.max(0, Math.min(position, src.length));
+      // Trim leading newline on the second half so the split feels clean.
+      let firstHalf = src.slice(0, pos);
+      let secondHalf = src.slice(pos);
+      // If the split point is mid-line, push the remainder to the new cell.
+      if (firstHalf && !firstHalf.endsWith("\n")) {
+        const lastNl = firstHalf.lastIndexOf("\n");
+        if (lastNl >= 0) {
+          secondHalf = firstHalf.slice(lastNl + 1) + secondHalf;
+          firstHalf = firstHalf.slice(0, lastNl + 1);
+        } else {
+          secondHalf = firstHalf + secondHalf;
+          firstHalf = "";
+        }
+      }
+      secondHalf = secondHalf.replace(/^\n+/, "");
+      const newCell = makeCell(cell.kind, secondHalf);
+      const cells = [...s.cells];
+      cells[idx] = { ...cell, source: firstHalf };
+      cells.splice(idx + 1, 0, newCell);
+      return { cells, activeCellId: newCell.id, dirty: true };
+    });
+  },
+
+  mergeCellDown: (cellId) => {
+    set((s) => {
+      const idx = s.cells.findIndex((c) => c.id === cellId);
+      if (idx < 0 || idx >= s.cells.length - 1) return s;
+      const cur = s.cells[idx];
+      const next = s.cells[idx + 1];
+      // Only merge same-kind cells. For mixed kinds, convert both to code.
+      const mergedKind: CellKind = cur.kind === next.kind ? cur.kind : "code";
+      const joiner = cur.source.endsWith("\n") || cur.source === "" ? "" : "\n";
+      const mergedSource = cur.source + joiner + next.source;
+      const merged: CellModel = {
+        ...cur,
+        kind: mergedKind,
+        source: mergedSource,
+        // Preserve the richer outputs/error state of whichever cell had any.
+        outputs: next.outputs.length > cur.outputs.length ? next.outputs : cur.outputs,
+        hasError: cur.hasError || next.hasError,
+        errorSummary: next.errorSummary ?? cur.errorSummary,
+        executionCount: next.executionCount ?? cur.executionCount,
+        executionTimeMs: next.executionTimeMs ?? cur.executionTimeMs,
+      };
+      const cells = [...s.cells];
+      cells.splice(idx, 2, merged);
+      return { cells, activeCellId: merged.id, dirty: true };
+    });
+  },
+
+  moveCellTo: (sourceId, targetId, position) => {
+    if (sourceId === targetId) return;
+    set((s) => {
+      const cells = [...s.cells];
+      const srcIdx = cells.findIndex((c) => c.id === sourceId);
+      const tgtIdx = cells.findIndex((c) => c.id === targetId);
+      if (srcIdx < 0 || tgtIdx < 0) return s;
+      const [moved] = cells.splice(srcIdx, 1);
+      // Recompute target index after removal.
+      const newTgtIdx = cells.findIndex((c) => c.id === targetId);
+      const insertAt = position === "before" ? newTgtIdx : newTgtIdx + 1;
+      cells.splice(insertAt, 0, moved);
+      return { cells, dirty: true };
+    });
+  },
+
+  toggleFocusMode: (on) =>
+    set((s) => ({ focusMode: typeof on === "boolean" ? on : !s.focusMode })),
 
   runCell: async (cellId) => {
     const state = get();
