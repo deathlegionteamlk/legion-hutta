@@ -49,6 +49,17 @@ const GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: "Bookmarks, runs & stats (v0.5)",
+    items: [
+      { keys: "Shift+B", desc: "Bookmark / un-bookmark the active cell" },
+      { keys: "Shift+R", desc: "Run all code cells above the active cell" },
+      { keys: "Shift+N", desc: "Run the active cell and all code cells below" },
+      { keys: "Ctrl+Shift+L", desc: "Clear outputs of every code cell" },
+      { keys: "Ctrl+Shift+K", desc: "Open the snippets library" },
+      { keys: "Ctrl+Shift+Y", desc: "Open the notebook statistics modal" },
+    ],
+  },
+  {
     title: "Panels & palette",
     items: [
       { keys: "Ctrl+P", desc: "Command palette" },

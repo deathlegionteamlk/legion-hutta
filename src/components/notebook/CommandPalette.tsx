@@ -49,6 +49,12 @@ import {
   ClipboardPaste,
   Merge,
   Maximize2,
+  Sparkles,
+  BarChart3,
+  Eraser,
+  Star,
+  PlayCircle,
+  AlignEndVertical,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import {
@@ -133,6 +139,31 @@ export function CommandPalette() {
           <CommandItem onSelect={() => run(() => store.toggleFocusMode())}>
             <Maximize2 className="mr-2 h-4 w-4" />
             Toggle focus mode (F)
+          </CommandItem>
+          <CommandSeparator />
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.toggleCellBookmark(store.activeCellId))}>
+            <Star className="mr-2 h-4 w-4" />
+            Toggle bookmark on active cell (Shift+B)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.runCellsAbove(store.activeCellId))}>
+            <PlayCircle className="mr-2 h-4 w-4" />
+            Run all cells above active (Shift+R)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.activeCellId && store.runCellsBelow(store.activeCellId))}>
+            <AlignEndVertical className="mr-2 h-4 w-4" />
+            Run active cell and all below (Shift+N)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.clearAllOutputs())}>
+            <Eraser className="mr-2 h-4 w-4" />
+            Clear all outputs (Ctrl+Shift+L)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleSnippets(true))}>
+            <Sparkles className="mr-2 h-4 w-4" />
+            Open snippets library (Ctrl+Shift+K)
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => store.toggleStats(true))}>
+            <BarChart3 className="mr-2 h-4 w-4" />
+            Notebook statistics (Ctrl+Shift+Y)
           </CommandItem>
         </CommandGroup>
 

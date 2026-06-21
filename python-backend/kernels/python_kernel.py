@@ -2,7 +2,7 @@
 Python kernel for Legion Hutta.
 
 Thin orchestrator that delegates execution to a pluggable sandbox
-(local subprocess, E2B, Daytona, mock cloud). Supports:
+(local subprocess, E2B, Daytona). Supports:
 
   - Persistent state across executions (via the underlying sandbox)
   - Rich output: stdout, stderr, errors, structured results with

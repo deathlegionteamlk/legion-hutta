@@ -235,6 +235,28 @@ interface NotebookStore extends NotebookState {
   dirty: boolean;
   markDirty: () => void;
 
+  // ---- v0.5 features ----
+
+  // clear all outputs (toolbar + command palette)
+  clearAllOutputs: () => void;
+
+  // run cells above / below active cell
+  runCellsAbove: (cellId: string) => Promise<void>;
+  runCellsBelow: (cellId: string) => Promise<void>;
+
+  // cell bookmarks + tags
+  toggleCellBookmark: (cellId: string) => void;
+  setCellTags: (cellId: string, tags: string[]) => void;
+
+  // snippets library (modal)
+  snippetsOpen: boolean;
+  toggleSnippets: (open?: boolean) => void;
+  insertSnippet: (snippet: { label: string; kind: CellKind; source: string }, afterCellId?: string | null) => void;
+
+  // notebook statistics modal
+  statsOpen: boolean;
+  toggleStats: (open?: boolean) => void;
+
   // lifecycle
   init: () => Promise<void>;
   startKernel: (specName?: string, sandboxName?: string) => Promise<void>;
@@ -302,6 +324,10 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
   clipboard: null,
   focusMode: false,
   lastSavedAt: null,
+
+  // v0.5 state
+  snippetsOpen: false,
+  statsOpen: false,
 
   commandPaletteOpen: false,
 
@@ -1186,6 +1212,88 @@ export const useNotebookStore = create<NotebookStore>((set, get) => ({
       }
     }
   },
+
+  // ---- v0.5 implementations ----
+
+  clearAllOutputs: () => {
+    set((s) => ({
+      cells: s.cells.map((c) =>
+        c.kind === "code"
+          ? {
+              ...c,
+              outputs: [],
+              hasError: false,
+              errorSummary: null,
+              executionCount: null,
+              executionTimeMs: null,
+              isRunning: false,
+            }
+          : c,
+      ),
+      dirty: true,
+    }));
+  },
+
+  runCellsAbove: async (cellId) => {
+    const { cells } = get();
+    const idx = cells.findIndex((c) => c.id === cellId);
+    if (idx < 0) return;
+    for (let i = 0; i < idx; i++) {
+      const cell = cells[i];
+      if (cell.kind === "code") {
+        await get().runCell(cell.id);
+        const updated = get().cells.find((c) => c.id === cell.id);
+        if (updated?.hasError) break;
+      }
+    }
+  },
+
+  runCellsBelow: async (cellId) => {
+    const { cells } = get();
+    const idx = cells.findIndex((c) => c.id === cellId);
+    if (idx < 0) return;
+    for (let i = idx; i < cells.length; i++) {
+      const cell = cells[i];
+      if (cell.kind === "code") {
+        await get().runCell(cell.id);
+        const updated = get().cells.find((c) => c.id === cell.id);
+        if (updated?.hasError) break;
+      }
+    }
+  },
+
+  toggleCellBookmark: (cellId) => {
+    set((s) => ({
+      cells: s.cells.map((c) =>
+        c.id === cellId ? { ...c, bookmarked: !c.bookmarked } : c,
+      ),
+      dirty: true,
+    }));
+  },
+
+  setCellTags: (cellId, tags) => {
+    const cleaned = Array.from(
+      new Set(tags.map((t) => t.trim()).filter((t) => t.length > 0)),
+    );
+    set((s) => ({
+      cells: s.cells.map((c) => (c.id === cellId ? { ...c, tags: cleaned } : c)),
+      dirty: true,
+    }));
+  },
+
+  toggleSnippets: (on) =>
+    set((s) => ({ snippetsOpen: typeof on === "boolean" ? on : !s.snippetsOpen })),
+
+  insertSnippet: (snippet, afterCellId) => {
+    get().insertCells(
+      [{ kind: snippet.kind, source: snippet.source }],
+      afterCellId ?? null,
+    );
+    set({ snippetsOpen: false });
+  },
+
+  toggleStats: (on) =>
+    set((s) => ({ statsOpen: typeof on === "boolean" ? on : !s.statsOpen })),
 
   setTitle: (title) => set({ title }),
 }));

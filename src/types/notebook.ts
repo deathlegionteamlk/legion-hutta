@@ -106,6 +106,11 @@ export interface CellModel {
   executionTimeMs: number | null;
   /** True if the code editor is collapsed (output only). */
   collapsed: boolean;
+  /** v0.5: user-set bookmark flag (star in gutter). Bookmarked cells
+   *  appear in a dedicated section of the Outline panel. */
+  bookmarked?: boolean;
+  /** v0.5: free-form tags for grouping / filtering. */
+  tags?: string[];
 }
 
 export interface NotebookState {

@@ -39,6 +39,10 @@ import {
   List,
   Search,
   WrapText,
+  Sparkles,
+  BarChart3,
+  Eraser,
+  MoreVertical,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -89,6 +93,9 @@ export function Toolbar() {
   const exportLegion = useNotebookStore((s) => s.exportLegion);
   const exportIpynb = useNotebookStore((s) => s.exportIpynb);
   const importFromFile = useNotebookStore((s) => s.importFromFile);
+  const clearAllOutputs = useNotebookStore((s) => s.clearAllOutputs);
+  const toggleSnippets = useNotebookStore((s) => s.toggleSnippets);
+  const toggleStats = useNotebookStore((s) => s.toggleStats);
   const aiPanelOpen = useNotebookStore((s) => s.aiPanelOpen);
   const variablesPanelOpen = useNotebookStore((s) => s.variablesPanelOpen);
   const outlineOpen = useNotebookStore((s) => s.outlineOpen);
@@ -116,7 +123,7 @@ export function Toolbar() {
               </span>
             </div>
             <span className="text-[10px] text-muted-foreground/70">
-              v0.3 · better than all notebooks
+              v0.5 · better than all notebooks
             </span>
           </div>
         </div>
@@ -309,6 +316,99 @@ export function Toolbar() {
                 AI Assistant (Ctrl+/)
               </TooltipContent>
             </Tooltip>
+
+            {/* Snippets library (v0.5) */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  onClick={() => toggleSnippets()}
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px]">
+                Snippets library
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Notebook stats (v0.5) */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  onClick={() => toggleStats()}
+                >
+                  <BarChart3 className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px]">
+                Notebook statistics
+              </TooltipContent>
+            </Tooltip>
+
+            {/* More actions: clear all outputs (v0.5) */}
+            <DropdownMenu>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="icon" variant="ghost" className="h-8 w-8">
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-[11px]">
+                    More actions
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  Notebook
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={clearAllOutputs}
+                  className="gap-2"
+                >
+                  <Eraser className="h-3.5 w-3.5 text-amber-500" />
+                  <div className="flex flex-col">
+                    <span className="text-[12px] font-medium">Clear all outputs</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Remove outputs & execution counts
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => toggleSnippets()}
+                  className="gap-2"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                  <div className="flex flex-col">
+                    <span className="text-[12px] font-medium">Open snippets library</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Quick-insert common code
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => toggleStats()}
+                  className="gap-2"
+                >
+                  <BarChart3 className="h-3.5 w-3.5 text-emerald-500" />
+                  <div className="flex flex-col">
+                    <span className="text-[12px] font-medium">Notebook statistics</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Cell counts, timings, tags
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* Save notebook (with dirty indicator) */}
             <Tooltip>

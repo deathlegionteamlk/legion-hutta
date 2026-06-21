@@ -42,6 +42,8 @@ import { Outline } from "./Outline";
 import { FindReplace } from "./FindReplace";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { StatusBar } from "./StatusBar";
+import { SnippetsLibrary } from "./SnippetsLibrary";
+import { NotebookStats } from "./NotebookStats";
 
 export function Notebook() {
   const cells = useNotebookStore((s) => s.cells);
@@ -73,6 +75,12 @@ export function Notebook() {
   const duplicateCell = useNotebookStore((s) => s.duplicateCell);
   const mergeCellDown = useNotebookStore((s) => s.mergeCellDown);
   const splitCell = useNotebookStore((s) => s.splitCell);
+  const toggleSnippets = useNotebookStore((s) => s.toggleSnippets);
+  const toggleStats = useNotebookStore((s) => s.toggleStats);
+  const clearAllOutputs = useNotebookStore((s) => s.clearAllOutputs);
+  const toggleCellBookmark = useNotebookStore((s) => s.toggleCellBookmark);
+  const runCellsAbove = useNotebookStore((s) => s.runCellsAbove);
+  const runCellsBelow = useNotebookStore((s) => s.runCellsBelow);
 
   // Boot the backend connection + kernel on first mount.
   useEffect(() => {
@@ -138,6 +146,24 @@ export function Notebook() {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "i" || e.key === "I")) {
         e.preventDefault();
         void importFromFile();
+        return;
+      }
+      // v0.5: Ctrl+Shift+K -> snippets library
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        toggleSnippets();
+        return;
+      }
+      // v0.5: Ctrl+Shift+Y -> notebook stats
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        toggleStats();
+        return;
+      }
+      // v0.5: Ctrl+Shift+L -> clear all outputs
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "l" || e.key === "L")) {
+        e.preventDefault();
+        clearAllOutputs();
         return;
       }
 
@@ -206,6 +232,25 @@ export function Notebook() {
         if (k === "M") {
           e.preventDefault();
           if (idx < cells.length - 1) mergeCellDown(activeCellId);
+          return;
+        }
+        // v0.5: Shift+B -> bookmark toggle
+        if (k === "B") {
+          // Override the "insert cell below" semantics when Shift is held.
+          e.preventDefault();
+          toggleCellBookmark(activeCellId);
+          return;
+        }
+        // v0.5: Shift+R -> run cells above
+        if (k === "R") {
+          e.preventDefault();
+          void runCellsAbove(activeCellId);
+          return;
+        }
+        // v0.5: Shift+N -> run cells below (N for "next")
+        if (k === "N") {
+          e.preventDefault();
+          void runCellsBelow(activeCellId);
           return;
         }
       }
@@ -285,6 +330,12 @@ export function Notebook() {
     pasteCell,
     duplicateCell,
     mergeCellDown,
+    toggleSnippets,
+    toggleStats,
+    clearAllOutputs,
+    toggleCellBookmark,
+    runCellsAbove,
+    runCellsBelow,
   ]);
 
   // Compute padding for open side panels so content doesn't go under them.
@@ -342,6 +393,8 @@ export function Notebook() {
       <CommandPalette />
       <FindReplace />
       <ShortcutsHelp />
+      <SnippetsLibrary />
+      <NotebookStats />
     </div>
   );
 }
@@ -366,7 +419,12 @@ function KeyboardHints() {
         <Hint k="Shift+C / X / V" desc="Copy / cut / paste cell" />
         <Hint k="Shift+D" desc="Duplicate cell" />
         <Hint k="Shift+M" desc="Merge with cell below" />
+        <Hint k="Shift+B" desc="Bookmark cell" />
+        <Hint k="Shift+R / N" desc="Run cells above / below" />
         <Hint k="Ctrl+Shift+-" desc="Split cell at cursor" />
+        <Hint k="Ctrl+Shift+K" desc="Snippets library" />
+        <Hint k="Ctrl+Shift+Y" desc="Notebook statistics" />
+        <Hint k="Ctrl+Shift+L" desc="Clear all outputs" />
         <Hint k="↑ / ↓" desc="Navigate cells" />
         <Hint k="Enter" desc="Edit cell" />
         <Hint k="Esc" desc="Exit edit / close dialog" />

@@ -4,7 +4,7 @@ Abstract base class for all kernels in Legion Hutta.
 A kernel is the user-facing execution context — it has a language,
 an execution count, lifecycle status, and a sandbox where code
 actually runs. The sandbox is pluggable (local subprocess, E2B,
-Daytona, mock cloud, ...) so a single kernel implementation can
+Daytona, ...) so a single kernel implementation can
 target multiple execution backends.
 
 Adding a new LANGUAGE = subclass BaseKernel + register in KERNEL_REGISTRY.

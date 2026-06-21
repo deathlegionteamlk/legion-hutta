@@ -11,15 +11,19 @@
  *
  * Supported MIME types for results:
  *  - text/html       -> sanitized inline HTML
- *  - image/png       -> <img> with data: URL
- *  - image/jpeg      -> <img> with data: URL
- *  - application/json-> pretty-printed JSON
+ *  - image/png       -> <img> with data: URL (v0.5: + download link)
+ *  - image/jpeg      -> <img> with data: URL (v0.5: + download link)
+ *  - application/json-> pretty-printed JSON (v0.5: + copy button)
  *  - text/markdown   -> rendered markdown
  *  - text/latex      -> raw (future: KaTeX)
- *  - text/plain      -> monospace fallback
+ *  - text/plain      -> monospace fallback (v0.5: + copy button)
+ *
+ * v0.5: each result chunk shows a small toolbar in the corner with
+ * Copy and (where applicable) Download buttons.
  */
 
-import { Loader2, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle, Copy, Download, Check } from "lucide-react";
+import { useState } from "react";
 import type { CellModel, OutputChunk } from "@/types/notebook";
 import { cn } from "@/lib/utils";
 import { MarkdownView } from "./MarkdownView";
@@ -75,6 +79,53 @@ function OutputChunkView({ chunk }: { chunk: OutputChunk }) {
   return null;
 }
 
+function CopyButton({ getText, label = "Copy" }: { getText: () => string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        try {
+          navigator.clipboard.writeText(getText());
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* clipboard may be unavailable */
+        }
+      }}
+      className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+      title={label}
+    >
+      {copied ? <Check className="h-2.5 w-2.5 text-emerald-500" /> : <Copy className="h-2.5 w-2.5" />}
+      <span>{copied ? "Copied" : label}</span>
+    </button>
+  );
+}
+
+function DownloadButton({ href, filename }: { href: string; filename: string }) {
+  return (
+    <a
+      href={href}
+      download={filename}
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+      title={`Download ${filename}`}
+    >
+      <Download className="h-2.5 w-2.5" />
+      <span>Save</span>
+    </a>
+  );
+}
+
+function ResultToolbar({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="absolute right-1.5 top-1.5 flex items-center gap-1 opacity-0 transition-opacity group-hover/result:opacity-100">
+      {children}
+    </div>
+  );
+}
+
 function RichResult({ chunk }: { chunk: OutputChunk }) {
   const data = chunk.data || {};
 
@@ -82,14 +133,18 @@ function RichResult({ chunk }: { chunk: OutputChunk }) {
   const img = data["image/png"] ?? data["image/jpeg"];
   if (typeof img === "string") {
     const mime = data["image/png"] ? "image/png" : "image/jpeg";
+    const ext = mime === "image/png" ? "png" : "jpg";
     const src = img.startsWith("data:") ? img : `data:${mime};base64,${img}`;
     return (
-      <div className="my-2">
+      <div className="group/result relative my-2">
         <img
           src={src}
           alt="Cell output image"
           className="max-w-full rounded border border-border/40"
         />
+        <ResultToolbar>
+          <DownloadButton href={src} filename={`legion-output.${ext}`} />
+        </ResultToolbar>
       </div>
     );
   }
@@ -97,18 +152,23 @@ function RichResult({ chunk }: { chunk: OutputChunk }) {
   // HTML
   if (typeof data["text/html"] === "string") {
     return (
-      <div
-        className="my-2 overflow-x-auto rounded border border-border/40 bg-background p-2 text-[12.5px]"
-        dangerouslySetInnerHTML={{ __html: data["text/html"] }}
-      />
+      <div className="group/result relative my-2 overflow-x-auto rounded border border-border/40 bg-background p-2 text-[12.5px]">
+        <div dangerouslySetInnerHTML={{ __html: data["text/html"] }} />
+        <ResultToolbar>
+          <CopyButton getText={() => data["text/html"] as string} label="Copy HTML" />
+        </ResultToolbar>
+      </div>
     );
   }
 
   // Markdown (the %%ai magic uses this)
   if (typeof data["text/markdown"] === "string") {
     return (
-      <div className="my-2">
+      <div className="group/result relative my-2">
         <MarkdownView source={data["text/markdown"]} />
+        <ResultToolbar>
+          <CopyButton getText={() => data["text/markdown"] as string} label="Copy MD" />
+        </ResultToolbar>
       </div>
     );
   }
@@ -124,28 +184,45 @@ function RichResult({ chunk }: { chunk: OutputChunk }) {
     } catch {
       jsonStr = String(data["application/json"]);
     }
+    const blobUrl = `data:application/json;charset=utf-8,${encodeURIComponent(jsonStr)}`;
     return (
-      <pre className="my-2 whitespace-pre-wrap break-words rounded border border-border/40 bg-background p-2 font-mono text-[12px] leading-relaxed">
-        {jsonStr}
-      </pre>
+      <div className="group/result relative my-2">
+        <pre className="whitespace-pre-wrap break-words rounded border border-border/40 bg-background p-2 font-mono text-[12px] leading-relaxed">
+          {jsonStr}
+        </pre>
+        <ResultToolbar>
+          <CopyButton getText={() => jsonStr} label="Copy JSON" />
+          <DownloadButton href={blobUrl} filename="legion-output.json" />
+        </ResultToolbar>
+      </div>
     );
   }
 
   // LaTeX (render as raw for now)
   if (typeof data["text/latex"] === "string") {
     return (
-      <pre className="my-2 whitespace-pre-wrap break-words font-mono text-[12px] italic">
-        {data["text/latex"]}
-      </pre>
+      <div className="group/result relative my-2">
+        <pre className="whitespace-pre-wrap break-words font-mono text-[12px] italic">
+          {data["text/latex"]}
+        </pre>
+        <ResultToolbar>
+          <CopyButton getText={() => data["text/latex"] as string} label="Copy LaTeX" />
+        </ResultToolbar>
+      </div>
     );
   }
 
   // Plain text fallback
   if (chunk.text) {
     return (
-      <pre className="whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed text-foreground/90">
-        {chunk.text}
-      </pre>
+      <div className="group/result relative">
+        <pre className="whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed text-foreground/90">
+          {chunk.text}
+        </pre>
+        <ResultToolbar>
+          <CopyButton getText={() => chunk.text} label="Copy text" />
+        </ResultToolbar>
+      </div>
     );
   }
 

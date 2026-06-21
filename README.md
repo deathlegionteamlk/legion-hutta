@@ -20,6 +20,14 @@ variables inspector, a command palette, and a public v1 API for agentic AIs.
 - **Persistent kernel state** — variables, imports, and module-level mutations survive across cells.
 - **Execution metadata** — execution count, wall-clock time per cell, error state.
 
+### v0.5 — Productivity & analytics
+- **Cell bookmarks** — star important cells (`Shift+B` or the star icon in the cell hover toolbar). Bookmarks appear in a dedicated section at the top of the Outline panel.
+- **Snippets library** (`Ctrl+Shift+K`) — modal dialog with quick-insert code patterns: imports, CSV loading, plots, function templates, `%%ai` prompts, markdown sections, benchmark scaffolds. Click to insert below the active cell.
+- **Notebook statistics** (`Ctrl+Shift+Y`) — modal with cell counts (code / markdown / bookmarked), source size (chars / lines / bytes), execution-time stats (total / avg / slowest), tag aggregation.
+- **Clear all outputs** (`Ctrl+Shift+L`) — wipes outputs, execution counts, and timings for every code cell in one keystroke.
+- **Run cells above** (`Shift+R`) and **run cells below** (`Shift+N`) — execute only the cells before or after the active cell, stopping on the first error.
+- **Output actions** — hover any rich output to reveal Copy and Download buttons. Images download as `.png` / `.jpg`; JSON downloads as `.json`; HTML / markdown / LaTeX / plain text all have one-click copy.
+
 ### v0.4 — Cell editing & UX
 - **Cell drag-and-drop reordering** — grab any cell by its left gutter to drag it anywhere.
 - **Clipboard**: copy (`Shift+C`), cut (`Shift+X`), paste (`Shift+V`), duplicate (`Shift+D`).

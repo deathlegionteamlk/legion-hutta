@@ -341,3 +341,57 @@ Stage Summary:
   7. **Repository hygiene** — README, LICENSE, expanded .gitignore.
 - TypeScript clean, ESLint clean, Next.js production build succeeds.
 - The hydration mismatch from the prior session was already fixed by the `stableId()` change in v0.3.1; verified the welcome cells now use IDs like `welcome-0001` (deterministic, identical on server and client).
+
+---
+Task ID: legion-hutta-v0.5
+Agent: main (Super Z)
+Task: v0.5 — cell bookmarks, snippets library, notebook statistics modal, clear-all-outputs, run-above/below, output copy/download actions; clean residual "mock" references in backend docstrings; bump version label to v0.5; verify build clean; commit and push to GitHub with provided PAT.
+
+Work Log:
+- Removed the lingering "mock cloud" mentions in `python-backend/kernels/base.py` and `python-backend/kernels/python_kernel.py` docstrings. No code mocks were left — `SandboxRegistry` only registers local / e2b / daytona, confirmed earlier.
+- Extended `CellModel` (`src/types/notebook.ts`) with two optional fields: `bookmarked?: boolean` and `tags?: string[]`.
+- Extended the store (`src/lib/notebook-store.ts`) with new actions + state:
+  - `clearAllOutputs()` — wipes outputs, error state, execution count + timing on every code cell; sets dirty.
+  - `runCellsAbove(cellId)` / `runCellsBelow(cellId)` — sequential execution up to / from the active cell, stopping on first error.
+  - `toggleCellBookmark(cellId)` — flips `bookmarked` flag.
+  - `setCellTags(cellId, tags)` — replaces the cell's tag list (deduped + trimmed).
+  - `snippetsOpen: boolean` + `toggleSnippets(on?)` + `insertSnippet(snippet, afterCellId?)` — opens the snippets modal and inserts the chosen snippet as a new cell below the active one (or at the end).
+  - `statsOpen: boolean` + `toggleStats(on?)` — opens the statistics modal.
+- Created `SnippetsLibrary.tsx` — modal dialog with 10 curated snippets grouped into 4 sections (Setup & data, Plots & media, Python patterns, AI & markdown). Each snippet card shows label, kind badge, description, and a 3-line code preview; clicking inserts below the active cell and closes.
+- Created `NotebookStats.tsx` — modal dialog aggregating: code/markdown/bookmarked cell counts, total/executed/error counts, source lines + chars + byte size, execution time stats (total / avg / slowest), the slowest cell preview, and a tag-cloud section listing every tag with its usage count.
+- Updated `Outline.tsx` — added a "Bookmarks" section at the top of the outline panel listing every cell with `bookmarked: true`. Each bookmark entry shows a ★ icon and a one-line source preview; clicking jumps to the cell. Falls back gracefully when no bookmarks exist.
+- Updated `Cell.tsx`:
+  - Added a star button to the hover toolbar (between "Fix error with AI" and "Delete"). Filled amber when bookmarked, outline muted otherwise.
+  - Added a persistent amber star icon at the bottom of the left gutter when the cell is bookmarked — visible even when the hover toolbar is hidden.
+- Updated `OutputArea.tsx` — added a small hover-only toolbar to every rich result chunk:
+  - Images (PNG/JPEG): "Save" link downloads the image with the right extension.
+  - HTML / Markdown / LaTeX / Plain text: "Copy" button copies the raw text via `navigator.clipboard`.
+  - JSON: both "Copy JSON" and "Save" (downloads as `legion-output.json`).
+  - Buttons use a `Copy`/`Check` swap with a 1.2s "Copied" confirmation state.
+- Updated `Toolbar.tsx`:
+  - Bumped brand subtitle to "v0.5 · better than all notebooks".
+  - Added three new icon buttons: Snippets (Sparkles), Stats (BarChart3), More actions (MoreVertical).
+  - The "More actions" dropdown groups: Clear all outputs (Eraser, amber), Open snippets library, Notebook statistics.
+- Updated `Notebook.tsx`:
+  - Mounted the new `<SnippetsLibrary />` and `<NotebookStats />` modals.
+  - Added 4 new keyboard shortcuts: `Ctrl+Shift+K` (snippets), `Ctrl+Shift+Y` (stats), `Ctrl+Shift+L` (clear all outputs), and `Shift+B`/`Shift+R`/`Shift+N` in command mode (bookmark / run above / run below).
+  - The `Shift+B` shortcut intentionally overrides the "insert cell below" `B` binding when Shift is held (the plain `B` still inserts below — only the Shift variant toggles the bookmark).
+  - Updated the deps array of the keyboard handler `useEffect` with all new action callbacks.
+  - Extended the in-app KeyboardHints footer grid with the 5 new shortcuts.
+- Updated `ShortcutsHelp.tsx` — added a new "Bookmarks, runs & stats (v0.5)" group with all 6 new shortcuts.
+- Updated `CommandPalette.tsx` — added 5 new commands to the "Cells" group: toggle bookmark, run above, run below, clear all outputs, open snippets, notebook stats. Imported the corresponding icons (`Star`, `PlayCircle`, `AlignEndVertical`, `Eraser`, `Sparkles`, `BarChart3`).
+- Updated `README.md` — added a "v0.5 — Productivity & analytics" feature section above the v0.4 section.
+- Verified `npx tsc --noEmit` is clean for `src/` (errors only in `examples/` and `skills/` which are not part of the project).
+- Verified `npx eslint src/components/notebook/ src/lib/notebook-store.ts src/types/notebook.ts --max-warnings 0` is clean.
+- Verified `npx next build` succeeds — 4 static pages + 9 dynamic API routes generated, 0 errors.
+
+Stage Summary:
+- v0.5 ships 6 new feature areas on top of v0.4:
+  1. **Cell bookmarks** — star in gutter + outline panel section.
+  2. **Snippets library** — modal with 10 curated snippets grouped into 4 categories.
+  3. **Notebook statistics** — modal with cell/source/time/tag aggregates.
+  4. **Clear all outputs** — one-keystroke cleanup of every code cell.
+  5. **Run cells above / below** — partial-execution helpers.
+  6. **Output copy / download** — hover toolbar on every rich result chunk.
+- TypeScript clean. ESLint clean. Next.js production build succeeds.
+- The hydration mismatch from the prior session was already fixed by the v0.3.1 `stableId()` change; v0.5 doesn't regress it (no new module-level non-deterministic IDs introduced).

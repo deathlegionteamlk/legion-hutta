@@ -35,6 +35,7 @@ import {
   ClipboardPaste,
   Merge,
   GripVertical,
+  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -84,6 +85,7 @@ export function Cell({ cell, index }: CellProps) {
   const explainCell = useNotebookStore((s) => s.explainCell);
   const fixCell = useNotebookStore((s) => s.fixCell);
   const toggleCellCollapsed = useNotebookStore((s) => s.toggleCellCollapsed);
+  const toggleCellBookmark = useNotebookStore((s) => s.toggleCellBookmark);
   const copyCell = useNotebookStore((s) => s.copyCell);
   const cutCell = useNotebookStore((s) => s.cutCell);
   const pasteCell = useNotebookStore((s) => s.pasteCell);
@@ -223,6 +225,12 @@ export function Cell({ cell, index }: CellProps) {
           </>
         ) : (
           <FileText className="mt-1 h-3 w-3 text-muted-foreground/60" />
+        )}
+        {cell.bookmarked && (
+          <Star
+            className="mt-auto mb-2 h-3 w-3 fill-amber-400 text-amber-500"
+            aria-label="Bookmarked"
+          />
         )}
       </div>
 
@@ -399,6 +407,22 @@ export function Cell({ cell, index }: CellProps) {
               </Button>
             </CellTooltip>
           )}
+
+          <CellTooltip label={cell.bookmarked ? "Remove bookmark" : "Bookmark cell"}>
+            <Button
+              size="icon"
+              variant="ghost"
+              className={cn(
+                "h-7 w-7",
+                cell.bookmarked
+                  ? "text-amber-500 hover:text-amber-600"
+                  : "text-muted-foreground hover:text-amber-500",
+              )}
+              onClick={() => toggleCellBookmark(cell.id)}
+            >
+              <Star className={cn("h-3 w-3", cell.bookmarked && "fill-amber-400")} />
+            </Button>
+          </CellTooltip>
 
           <CellTooltip label="Delete cell">
             <Button
