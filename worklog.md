@@ -395,3 +395,29 @@ Stage Summary:
   6. **Output copy / download** — hover toolbar on every rich result chunk.
 - TypeScript clean. ESLint clean. Next.js production build succeeds.
 - The hydration mismatch from the prior session was already fixed by the v0.3.1 `stableId()` change; v0.5 doesn't regress it (no new module-level non-deterministic IDs introduced).
+
+---
+Task ID: legion-hutta-v0.5-publish
+Agent: main (Super Z)
+Task: Publish the v0.5 codebase to GitHub as a public repo under the deathlegionteamlk account, then clean up any accidentally-committed local artifacts.
+
+Work Log:
+- Authenticated to GitHub API with the user-provided PAT and confirmed the account is `deathlegionteamlk` (Death Legion Team, Sri Lanka).
+- Created a new **public** repository `deathlegionteamlk/legion-hutta` via `POST /user/repos` with description: "A modern, language-agnostic web notebook — better than all notebooks. By Death Legion Team. Next.js 16 + React 19 + FastAPI." Issues + wiki enabled, auto-init disabled.
+- Configured local git: `user.email = deathlegionteamlk@users.noreply.github.com`, `user.name = Death Legion Team`. Added the PAT-bearing remote, pushed `main`, then **reset the remote URL** to the non-token form so the PAT is not stored in `.git/config`.
+- Discovered that earlier commits (pre-.gitignore expansion) had committed local-only artifacts: `.env` (just `DATABASE_URL=file:/home/z/my-project/db/custom.db` — no real secret), `db/custom.db` (local SQLite with notebook data), `python-backend.pid`, `.zscripts/dev.pid`, `download/*.png` screenshots, `examples/`, `mini-services/.gitkeep`, and `tool-results/` output.
+- Removed all of these from the index with `git rm --cached -r`, then ran `git filter-branch --index-filter` to purge them from the **entire commit history** (every commit, all branches). Force-pushed the rewritten history to `origin/main` so the public repo no longer contains any of these files in any historical commit. Verified via the GitHub Contents API that `.env`, `db/custom.db`, `python-backend.pid`, `download/`, `examples/`, `mini-services/`, and `tool-results/` all return 404 on `raw.githubusercontent.com`.
+- The .gitignore was extended with explicit rules for `.env`, `*.pid`, `.zscripts/dev.pid`, `db/*.db`, and `db/*.db-journal` so future commits can't re-add them.
+- Final public repo state (verified via GitHub API):
+  - `full_name`: `deathlegionteamlk/legion-hutta`
+  - `private`: `false` (public)
+  - `html_url`: https://github.com/deathlegionteamlk/legion-hutta
+  - `default_branch`: `main`
+  - `license`: MIT
+  - Top-level contents: `.gitignore`, `.zscripts/`, `Caddyfile`, `LICENSE`, `README.md`, `bun.lock`, `components.json`, `eslint.config.mjs`, `next.config.ts`, `package.json`, `postcss.config.mjs`, `prisma/`, `public/`, `python-backend/`, `scripts/`, `src/`, `tailwind.config.ts`, `tsconfig.json`, `worklog.md`.
+
+Stage Summary:
+- The Legion Hutta codebase is now live at https://github.com/deathlegionteamlk/legion-hutta as a public repo with MIT license.
+- v0.5 ships all the new features (bookmarks, snippets, stats, clear-outputs, run-above/below, output actions).
+- History is clean — no `.env`, no local DB, no PID files, no tool-results in any commit.
+- The PAT-bearing remote URL has been replaced with the public clone URL, so the token is not retained in the local git config. The user can safely revoke the PAT now.
