@@ -1,0 +1,92 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "huggingface-tour.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T09:50:00.000Z",
+    "updated_at": "2026-06-21T09:55:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# HuggingFace Tour — 8 Models in One Notebook\n\nA guided tour across the HuggingFace ecosystem: each cell exercises a different model category. Useful as a smoke test for a freshly installed GPU box.\n\n## Prerequisites\n\n```bash\npip install transformers diffusers accelerate torch sentence-transformers soundfile librosa pillow\n```\n\n## Categories covered\n\n1. **Text generation** — DistilGPT2\n2. **Sentiment classification** — DistilBERT SST-2\n3. **Token / NER** — BERT NER\n4. **Embeddings** — Sentence-Transformers MiniLM\n5. **Image classification** — ViT ImageNet-1k\n6. **Zero-shot classification** — BART MNLI\n7. **Image generation** — Stable Diffusion v1.5 (skipped if no GPU)\n8. **Speech synthesis** — SpeechT5 TTS (skipped if no GPU)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-setup",
+      "kind": "code",
+      "source": "import torch\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nprint(\"device:\", DEVICE, \"torch:\", torch.__version__)\nHAS_GPU = DEVICE == \"cuda\"",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-1-textgen",
+      "kind": "code",
+      "source": "# 1. Text generation — DistilGPT2 (lightweight, runs anywhere).\nfrom transformers import pipeline\ngenerator = pipeline(\"text-generation\", model=\"distilgpt2\", device=0 if HAS_GPU else -1)\n\nfor r in generator(\"Once upon a time in a galaxy far away\", max_length=40, num_return_sequences=1):\n    print(r[\"generated_text\"])\n    print(\"---\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-2-sentiment",
+      "kind": "code",
+      "source": "# 2. Sentiment classification — DistilBERT fine-tuned on SST-2.\nclassifier = pipeline(\"sentiment-analysis\", model=\"distilbert-base-uncased-finetuned-sst-2-english\",\n                      device=0 if HAS_GPU else -1)\n\nfor text in [\n    \"I absolutely loved this movie — the cinematography was stunning.\",\n    \"The plot was incoherent and the acting wooden.\",\n    \"It was fine, I guess.\",\n]:\n    print(classifier(text))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-3-ner",
+      "kind": "code",
+      "source": "# 3. Named-entity recognition — BERT NER.\nner = pipeline(\"ner\", model=\"dslim/bert-base-NER\", aggregation_strategy=\"simple\",\n              device=0 if HAS_GPU else -1)\n\nentities = ner(\"Barack Obama was born in Honolulu and served as the 44th US president.\")\nfor e in entities:\n    print(f\"  {e['entity_group']:8s} {e['word']:20s} score={e['score']:.3f}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-4-embeddings",
+      "kind": "code",
+      "source": "# 4. Sentence embeddings — Sentence-Transformers MiniLM.\nfrom sentence_transformers import SentenceTransformer\nimport numpy as np\n\nst = SentenceTransformer(\"sentence-transformers/all-MiniLM-L6-v2\", device=DEVICE)\nvecs = st.encode([\n    \"I love machine learning.\",\n    \"Deep learning is fascinating.\",\n    \"The weather today is sunny.\",\n])\nprint(\"shape:\", vecs.shape)\nsim = vecs @ vecs.T\nprint(\"cosine similarity matrix:\")\nprint(np.round(sim, 2))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-5-image-cls",
+      "kind": "code",
+      "source": "# 5. Image classification — ViT fine-tuned on ImageNet-1k.\nfrom PIL import Image\nfrom urllib.request import urlretrieve\n\nimg_path = \"panda.jpg\"\nurlretrieve(\"https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG\", img_path)\nimg = Image.open(img_path).convert(\"RGB\")\n\nic = pipeline(\"image-classification\", model=\"google/vit-base-patch16-224\",\n              device=0 if HAS_GPU else -1)\nfor r in ic(img)[:5]:\n    print(f\"  {r['score']:.3f}  {r['label']}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-6-zero-shot",
+      "kind": "code",
+      "source": "# 6. Zero-shot classification — BART fine-tuned on MNLI.\nzs = pipeline(\"zero-shot-classification\", model=\"facebook/bart-large-mnli\",\n              device=0 if HAS_GPU else -1)\n\nresult = zs(\n    \"The new model handles long context with linear attention scaling.\",\n    candidate_labels=[\"machine learning\", \"cooking\", \"sports\", \"finance\"],\n)\nfor lbl, score in zip(result[\"labels\"], result[\"scores\"]):\n    print(f\"  {score:.3f}  {lbl}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-7-image-gen",
+      "kind": "code",
+      "source": "# 7. Image generation — Stable Diffusion v1.5 (skip on CPU, too slow).\nif HAS_GPU:\n    from diffusers import StableDiffusionPipeline\n    sd = StableDiffusionPipeline.from_pretrained(\"runwayml/stable-diffusion-v1-5\",\n                                                 torch_dtype=torch.float16).to(DEVICE)\n    img = sd(\"a watercolor painting of a fox sitting in a snowy meadow\",\n             num_inference_steps=20).images[0]\n    img.save(\"tour_sd.png\")\n    print(\"saved tour_sd.png\")\nelse:\n    print(\"skipping Stable Diffusion on CPU — set device to cuda to enable.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-8-tts",
+      "kind": "code",
+      "source": "# 8. Text-to-speech — SpeechT5 (skip on CPU).\nif HAS_GPU:\n    from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan\n    from datasets import load_dataset\n    import soundfile as sf\n\n    processor = SpeechT5Processor.from_pretrained(\"microsoft/speecht5_tts\")\n    tts = SpeechT5ForTextToSpeech.from_pretrained(\"microsoft/speecht5_tts\").to(DEVICE).eval()\n    vocoder = SpeechT5HifiGan.from_pretrained(\"microsoft/speecht5_hifigan\").to(DEVICE).eval()\n\n    xvectors = load_dataset(\"Matthijs/cmu-arctic-xvectors\", split=\"validation\")\n    spk = torch.tensor(xvectors[7306][\"xvector\"]).unsqueeze(0).to(DEVICE)\n\n    inputs = processor(text=\"Hugging Face tour complete.\", return_tensors=\"pt\").to(DEVICE)\n    with torch.inference_mode():\n        wav = tts.generate_speech(inputs[\"input_ids\"], spk, vocoder=vocoder)\n    sf.write(\"tour_tts.wav\", wav.cpu().numpy(), 16000)\n    print(\"saved tour_tts.wav\")\nelse:\n    print(\"skipping TTS on CPU — set device to cuda to enable.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-summary",
+      "kind": "markdown",
+      "source": "## Tour complete\n\nYou've exercised pipelines from 8 model families: text-generation, sentiment-analysis, ner, sentence-embeddings, image-classification, zero-shot-classification, text-to-image, and text-to-speech.\n\nNext steps:\n- Try the dedicated example notebooks in this folder for deeper dives.\n- Browse the `src/data/hf-datasets.ts` catalog for training data.\n- Use `huggingface-cli login` to access gated models like Llama-3 and FLUX.",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

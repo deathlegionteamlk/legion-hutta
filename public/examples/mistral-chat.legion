@@ -1,0 +1,71 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "mistral-chat.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T08:30:00.000Z",
+    "updated_at": "2026-06-21T08:34:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# Mistral-7B-Instruct Chat\n\n**Mistral-7B-Instruct-v0.3** is a fast, capable 7B instruction-tuned model. This notebook demonstrates using a strong **system prompt** for character / behavior control.\n\n## Prerequisites\n\n```bash\npip install transformers accelerate torch\n```\n\n## Notes\n\n- Model: `mistralai/Mistral-7B-Instruct-v0.3` (gated).\n- Uses Mistral's instruction format: `[INST] ... [/INST]`.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\n\nMODEL_ID = \"mistralai/Mistral-7B-Instruct-v0.3\"\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nDTYPE = torch.float16 if DEVICE == \"cuda\" else torch.float32\nprint(\"device:\", DEVICE, \"dtype:\", DTYPE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)\nif tokenizer.pad_token is None:\n    tokenizer.pad_token = tokenizer.eos_token\n\nmodel = AutoModelForCausalLM.from_pretrained(\n    MODEL_ID,\n    torch_dtype=DTYPE,\n    device_map=\"auto\",\n)\nmodel.eval()\nprint(\"Mistral loaded.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-system-prompt",
+      "kind": "code",
+      "source": "# Mistral 0.3 supports a system prompt via the chat template.\nSYSTEM_PROMPT = (\n    \"You are Captain Vega, a veteran starship pilot. \"\n    \"Answer in 2-3 short, decisive sentences. \"\n    \"Use nautical / space idioms when natural. \"\n    \"Never break character.\"\n)\n\nmessages = [\n    {\"role\": \"system\", \"content\": SYSTEM_PROMPT},\n    {\"role\": \"user\", \"content\": \"The reactor is overheating, what do we do?\"},\n]\n\nprompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)\nprint(repr(prompt[:200]))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-generate",
+      "kind": "code",
+      "source": "inputs = tokenizer(prompt, return_tensors=\"pt\").to(model.device)\n\nwith torch.inference_mode():\n    out = model.generate(\n        **inputs,\n        max_new_tokens=160,\n        do_sample=True,\n        temperature=0.6,\n        top_p=0.9,\n        repetition_penalty=1.1,\n    )\n\nreply = tokenizer.decode(out[0, inputs[\"input_ids\"].shape[1]:], skip_special_tokens=True)\nprint(reply)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-conversation",
+      "kind": "code",
+      "source": "# Continue the conversation — preserve the system prompt by always including it.\nmessages.append({\"role\": \"assistant\", \"content\": reply})\nmessages.append({\"role\": \"user\", \"content\": \"Asteroid field ahead — fly through or divert?\"})\n\nprompt2 = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)\ninputs2 = tokenizer(prompt2, return_tensors=\"pt\").to(model.device)\n\nwith torch.inference_mode():\n    out2 = model.generate(**inputs2, max_new_tokens=160, do_sample=True,\n                          temperature=0.6, top_p=0.9, repetition_penalty=1.1)\n\nreply2 = tokenizer.decode(out2[0, inputs2[\"input_ids\"].shape[1]:], skip_special_tokens=True)\nprint(reply2)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-batch",
+      "kind": "code",
+      "source": "# Batch multiple prompts for throughput. Left-pad so all sequences align.\ntokenizer.padding_side = \"left\"\n\nprompts = [\n    [{\"role\": \"system\", \"content\": SYSTEM_PROMPT},\n     {\"role\": \"user\", \"content\": \"Translate: 'May the stars light our path.'\"}],\n    [{\"role\": \"system\", \"content\": SYSTEM_PROMPT},\n     {\"role\": \"user\", \"content\": \"What's your favorite warp maneuver?\"}],\n]\nbatch = [tokenizer.apply_chat_template(m, tokenize=False, add_generation_prompt=True) for m in prompts]\ninputs = tokenizer(batch, return_tensors=\"pt\", padding=True).to(model.device)\n\nwith torch.inference_mode():\n    outs = model.generate(**inputs, max_new_tokens=80, do_sample=True,\n                          temperature=0.7, top_p=0.9)\n\nfor i, o in enumerate(outs):\n    txt = tokenizer.decode(o[inputs[\"input_ids\"].shape[1]:], skip_special_tokens=True)\n    print(f\"--- reply {i} ---\")\n    print(txt)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "import gc\ndel model\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"freed\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

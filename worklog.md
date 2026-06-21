@@ -421,3 +421,169 @@ Stage Summary:
 - v0.5 ships all the new features (bookmarks, snippets, stats, clear-outputs, run-above/below, output actions).
 - History is clean — no `.env`, no local DB, no PID files, no tool-results in any commit.
 - The PAT-bearing remote URL has been replaced with the public clone URL, so the token is not retained in the local git config. The user can safely revoke the PAT now.
+
+---
+Task ID: v0.6-examples-and-datasets
+Agent: full-stack-developer
+Task: Build HuggingFace datasets catalog + example .legion notebooks covering Stable Diffusion and major HF models.
+
+Work Log:
+- Read `/home/z/my-project/worklog.md` for project history (Legion Hutta v0.3.1 → v0.5; published to `deathlegionteamlk/legion-hutta`).
+- Read `/home/z/my-project/src/lib/legion-format.ts` and confirmed the `.legion` JSON schema:
+  - Top-level `{ format: "legion", format_version: 1, metadata, cells, ai_history? }`
+  - `metadata.kernel: { name, display_name, language } | null`
+  - `cell: { id, kind: "code"|"markdown", source, execution_count: number|null, outputs: OutputChunk[] }`
+  - `legion_version: "0.3.0"` (the `LEGION_APP_VERSION` constant).
+- Created `/home/z/my-project/src/data/hf-datasets.ts`:
+  - Hand-curated **138 datasets** across **11 categories** (nlp=30, vision=23, dialogue=20, audio=14, code=11, tabular=8, multimodal=8, reinforcement-learning=7, time-series=6, translation=6, graph=5).
+  - Each entry has: id, name, author, category, description, downloads (approximate, last-30-days), size, features (column names), installSnippet (`from datasets import load_dataset\nds = load_dataset("ID"[, "CONFIG"])`), tags.
+  - Exports: `HfDataset`, `HfDatasetCategory`, `HF_DATASET_CATEGORIES` (11 entries with icon+label+description), `HF_DATASETS` (138 entries), `HF_DATASET_COUNT`, plus `searchHfDatasets(query, category?)`, `getDatasetsByCategory(category)`, `getDatasetById(id)`.
+  - Search is whitespace-tokenized AND-matching across id/name/description/author/tags/features.
+  - Includes all the user-listed datasets (glue, squad, squad_v2, mnist, cifar10, cifar100, imagenet-1k, coco, imagenette, librispeech_asr, common_voice, mozilla-foundation/common_voice_15_0, wikitext, wikitext-2-raw-v1, wikitext-103-raw-v1, openwebtext, the_pile, c4, wikipedia, bookcorpus, lmsys-chat-1m, OpenAssistant/oasst1, OpenAssistant/oasst2, Anthropic/hh-rlhf, Dahoas/full-hh-rlhf, Dahoas/rm-static, tatsu-lab/alpaca, yahma/alpaca-cleaned, vicgalle/alpaca-gpt4, shibing624/sharegpt_gpt4, lm-sys/RouteBench, HuggingFaceH4/ultrachat_200k, HuggingFaceH4/ultrachat, teknium/OpenHermes-2.5, Open-Orca/OpenOrca, Open-Orca/slim-orca, garage-bAInd/Open-Platypus, garage-bAInd/Camel, databricks/databricks-dolly-15k, nvidia/HelpSteer, argilla/ultrafeedback-binarized-preferences-cleaned, HuggingFaceH4/stack-exchange-preferences, openai/summarize_from_feedback, CarperAI/openai_summarize_tldr, stanfordnlp/SHP, bigcode/the-stack, bigcode/the-stack-v2, openai_humaneval, mbpp, codeparrot/apps, wmt14, wmt19, opus_books, opus-100, flickr30k, etc.).
+- Created **16 `.legion` example notebooks** in `/home/z/my-project/examples/`, each:
+  - Valid JSON conforming to `serializeLegion()` output (format="legion", format_version=1, kernel={python3, Python 3, python}, sandbox="local", legion_version="0.3.0").
+  - Deterministic cell IDs (`cell-intro`, `cell-imports`, `cell-load`, ...).
+  - 1-2 markdown intro/summary cells with title + description + prerequisites (`pip install ...`) + model card link.
+  - 6-9 code cells progressing setup → load model → inference → display results.
+  - All code cells pass Python `ast.parse()` syntax validation.
+  - File sizes 4.0–7.5 KB.
+  - Realistic ISO timestamps in `created_at` / `updated_at`.
+
+  Notebooks created:
+   1. `stable-diffusion.legion` — SDXL text-to-image, prompt variations, negative prompts, refiner pipeline, NSFW filter bypass.
+   2. `flux-image-gen.legion` — FLUX.1-dev text-to-image, aspect-ratio sweeps, guidance-scale sweep, cpu-offload.
+   3. `llama-chat.legion` — Llama-3.1-8B-Instruct chat, multi-turn, TextIteratorStreamer streaming.
+   4. `mistral-chat.legion` — Mistral-7B-Instruct-v0.3 with character system prompt, batched left-padded generation.
+   5. `whisper-transcription.legion` — Whisper large-v3 with chunk + word timestamps, SRT export, translate task.
+   6. `bert-embeddings.legion` — all-MiniLM-L6-v2 cosine similarity, semantic search, k-means clustering, UMAP/PCA projection.
+   7. `yolo-detection.legion` — YOLOv8n inference, bbox plotting, JSON export, batch + video.
+   8. `clip-zero-shot.legion` — CLIP zero-shot classification, prompt-ensemble averaging, multi-image batch.
+   9. `speecht5-tts.legion` — SpeechT5 + HiFi-GAN TTS, multi-speaker x-vector voices, long-form chunked synthesis.
+  10. `llava-vision.legion` — LLaVA-1.5-7B multimodal VQA, follow-up questions, multi-image comparison.
+  11. `starcoder-code.legion` — StarCoder2-3B prefix + FIM completion, multilingual, mini HumanEval unit test.
+  12. `huggingface-tour.legion` — Showcase across 8 model families (text-gen, sentiment, NER, embeddings, image-cls, zero-shot, image-gen, TTS).
+  13. `finetune-llama-lora.legion` — QLoRA fine-tune of Llama-3.1-8B on Alpaca, 4-bit NF4, PEFT LoRA r=16, SFTTrainer, adapter save + merge instructions.
+  14. `stable-diffusion-controlnet.legion` — SD 1.5 + ControlNet-Depth with MiDaS depth estimation, conditioning-scale sweep, comparison grid.
+  15. `bark-tts.legion` — Bark multilingual TTS, non-verbal tags, music-style prompt, long-form crossfade stitching.
+  16. `rag-vector-search.legion` — End-to-end RAG with BGE-small embeddings + ChromaDB + FLAN-T5 generator.
+- Created `/home/z/my-project/examples/manifest.ts`:
+  - Typed manifest of all 16 notebooks with: id (slug), title, description, category (8 categories: image-gen, llm, audio, vision, embeddings, code, fine-tuning, showcase), tags, fileName, optional modelId, difficulty (beginner/intermediate/advanced), estimatedMinutes, cells (count).
+  - Exports `EXAMPLES` array + helpers `getExampleById`, `getExamplesByCategory`, `EXAMPLE_COUNT`, `ALL_EXAMPLE_TAGS`.
+- Validation performed:
+  - JSON.parse on every `.legion` file: all 16 OK.
+  - Python `ast.parse` on every code cell source: all 130 code cells across 16 notebooks pass syntax check.
+  - Manifest cell counts cross-checked against actual file cell counts: 16/16 match.
+  - `npx tsc --noEmit`: zero errors in `src/data/hf-datasets.ts` or `examples/manifest.ts` (errors only in pre-existing unrelated files: `examples/websocket/*`, `skills/*`, and a parallel-task file `src/data/hf-models.ts` that this task did not create or touch).
+  - `npx eslint src/data/hf-datasets.ts examples/manifest.ts --max-warnings 0 --no-ignore`: clean.
+- Did NOT modify any pre-existing files. Only added new files in `src/data/`, `examples/`, and `agent-ctx/`, and appended this section to `worklog.md`.
+
+Stage Summary:
+- **138 HuggingFace datasets** catalogued in `src/data/hf-datasets.ts` across **11 categories** with full-text search + category filter helpers.
+- **16 example `.legion` notebooks** shipped in `examples/`:
+  - 12 core (SDXL, FLUX, Llama-3.1, Mistral, Whisper, BERT, YOLO, CLIP, SpeechT5, LLaVA, StarCoder2, HuggingFace Tour)
+  - 4 advanced (QLoRA fine-tune, SD+ControlNet, Bark TTS, RAG vector search)
+  - Total **130 code cells**, all passing Python AST syntax validation
+  - All files 4–8 KB, valid JSON conforming to the `.legion` schema
+- **1 examples manifest** in `examples/manifest.ts` with typed entries for all 16 notebooks + helper functions.
+- TypeScript clean for all new files. ESLint clean for all new files.
+
+---
+Task ID: v0.6-hf-catalog
+Agent: hf-catalog-agent (Z.ai Code subagent)
+Task: Build a comprehensive, static TypeScript catalog of HuggingFace models organised by category — coverage of every major HF category plus the popular / most-downloaded models in each (200+ entries, 20+ categories). Used by the Legion Hutta snippets library and the future model-browser.
+
+Work Log:
+- Read `/home/z/my-project/worklog.md` to absorb prior context (Legion Hutta notebook MVP + v2 with sandboxes/AI cells/public API). Confirmed project layout: `src/data/` did not yet exist; created it alongside `/agent-ctx/` for inter-agent handoff records.
+- Authored `/home/z/my-project/src/data/hf-models.ts` as a pure static data module (no React, no `'use client'`, no network calls):
+  - Exported types: `HfModelCategory` (27-literal union), `HfModel`, `HfCategory`.
+  - Exported `HF_CATEGORIES` array with **27 categories** (text-generation, image-generation, speech-recognition, text-to-speech, image-classification, object-detection, text-classification, token-classification, translation, summarization, question-answering, embeddings, vision-language, code-generation, depth-estimation, image-segmentation, video-classification, text-to-video, reinforcement-learning, tabular, time-series, audio-classification, voice-activity-detection, feature-extraction, zero-shot-classification, image-to-image, unconditional-image-generation). Each entry includes a lucide icon name + Tailwind color token for downstream UI usage.
+  - Exported `HF_MODELS` array with **377 hand-curated model entries** (well above the 200+ requirement) distributed across all 27 categories (5–53 per category, median ≈ 10).
+    - Every entry has a real HF model id, display name, author org, category, task, 1–2 sentence description, approximate downloads/likes, tags, pipeline_tag, installSnippet (Python `transformers`/`diffusers`/`sentence-transformers`/`huggingface_sb3` etc.), exampleSnippet (4–6 lines of usage code), license, and ISO updatedAt.
+    - Featured models include: Llama-3.1/3.2/3 family, Mistral/Mixtral/Nemo/Large, Qwen2.5/QwQ, Phi-3/3.5/4, Gemma-2, GPT-2 family, Falcon, BLOOM, GPT-Neo/J/NeoX, Yi, Zephyr, OpenHermes, DeepSeek-V2/Coder, Command-R+, FLUX.1 dev/schnell/pro, SDXL/SD3/SD3.5/SD2.1/SD1.5/SD1.4, SDXL-Turbo/SD-Turbo, Kandinsky 2.1/2.2/3, Instruct-Pix2Pix, ControlNet, T2I-Adapter, Whisper (v3/v3-turbo/v2/medium/small/base/tiny), wav2vec2, HuBERT, MMS, Seamless-M4T, SpeechT5/Bark/MMS-TTS/MeloTTS/Parler-TTS/Coqui/VITS, ViT/ResNet/BEiT/ConvNeXt/MiT/EfficientNet/Swin, DETR/YOLOv8/v5/v10/YOLOS/Grounding-DINO/PP-YOLOE, BERT/RoBERTa/DeBERTa-v3/ALBERT/XLNet/BART-MNLI, BERT-NER/CamemBERT-NER/Flair/CKIP, NLLB/Opus-MT/M2M100/mT5/Flan-T5, BART-CNN/Pegasus/Long-T5/DistilBART/XLSum, RoBERTa-SQuAD2/BERT-SQuAD/TinyBERT, MiniLM/MPNet/E5/BGE/Nomic/Jina/mxbai, LLaVA-1.5/1.6/Next, BLIP-2/BLIP, GIT, IDEFICS2/3, Qwen2-VL, StarCoder2/CodeLlama/DeepSeek-Coder/CodeT5/CodeBERT, DPT/Depth-Anything-V1/V2/Marigold, Mask2Former/MaskFormer/DETR-Panoptic/SegFormer/UPerNet/RMBG, VideoMAE/TimeSformer/X3D, ModelScope-T2V/I2VGen-XL/AnimateDiff/LTX-Video, SB3 PPO/A2C/DQN agents, Chronos-T5/Monash/TimeXer/PatchTSM, AST/wav2vec2/UniSpeech-SAT, Silero-VAD/pyannote/MarbleNet, BART/ELECTRA/DeBERTa-v3/DistilBERT/XLM-RoBERTa features, BART-MNLI/DeBERTa-mnli/mDeBERTa-xnli zero-shot classifiers, ControlNet depth/canny/openpose v1+v1.1/Instruct-Pix2Pix/SDXL-refiner, DDPM CIFAR-10/CelebA-HQ/Bedrooms/Cats + GLIDE + LDM.
+  - Exported 4 helper functions:
+    - `searchHfModels(query, category?)` — case-insensitive search across name, id, author, description, task, tags; optional category scope; sorted by downloads desc.
+    - `getModelsByCategory(category)` — filter + sort by downloads desc.
+    - `getTrendingModels(limit = 10)` — top-N by downloads across all categories.
+    - `getCategoryStats()` — array of `{category, count}` for catalog overview chips.
+  - Exported `HF_MODEL_COUNT` and `HF_CATEGORY_COUNT` numeric constants for badges / hero counters.
+- Fixed 4 single-quote-in-string TypeScript errors after the first `tsc --noEmit` run (lines 420, 600, 834, 1230 — Mixtral/QwQ/GPT2-XL/Command-R example snippets that embedded apostrophes). Replaced embedded apostrophes with plain text to keep the strings unambiguous.
+- Verified the final file with:
+  - `bunx tsc --noEmit src/data/hf-models.ts` → clean (no errors).
+  - `bun run lint` → clean (no ESLint issues).
+  - File stats: **6747 lines**, **377 model entries**, **27 categories**, 4 helper functions + 2 count exports.
+
+Stage Summary:
+- File: `/home/z/my-project/src/data/hf-models.ts` — pure static data module, no React, no network calls.
+- Categories: **27** (covers every category in the task spec plus `voice-activity-detection`).
+- Models: **377** (well above the 200+ requirement; 5–53 per category, median ≈ 10).
+- Helpers: `searchHfModels`, `getModelsByCategory`, `getTrendingModels`, `getCategoryStats`, plus `HF_MODEL_COUNT` / `HF_CATEGORY_COUNT` constants.
+- Quality: passes `tsc --noEmit` and `bun run lint` cleanly. Every entry has a real HF id, installSnippet, exampleSnippet, license, and updatedAt.
+- Inter-agent handoff: see `/home/z/my-project/agent-ctx/v0.6-hf-catalog-hf-catalog-agent.md` for the full work record. Downstream agents can `import { HF_CATEGORIES, HF_MODELS, searchHfModels, getModelsByCategory, getTrendingModels, getCategoryStats, HF_MODEL_COUNT, HF_CATEGORY_COUNT } from '@/data/hf-models'`.
+
+---
+Task ID: legion-hutta-v0.6
+Agent: main (Super Z)
+Task: v0.6 — add 22 new feature folders + HuggingFace catalog (377 models, 138 datasets) + 16 curated example .legion notebooks (Stable Diffusion, Llama, Whisper, BERT, YOLO, CLIP, SpeechT5, LLaVA, StarCoder, FLUX, Bark, RAG, QLoRA fine-tune, ControlNet, mistral, huggingface-tour).
+
+Work Log:
+- Created `/home/z/my-project/src/data/hf-models.ts` (6,747 lines, 377 models across 27 categories) — covers every major HF model category: text-gen, image-gen, speech-recognition, text-to-speech, image-classification, object-detection, text/token classification, translation, summarization, QA, embeddings, vision-language, code-gen, depth-estimation, image-segmentation, video-classification, text-to-video, RL, tabular, time-series, audio-classification, feature-extraction, zero-shot, image-to-image, unconditional-image-gen, voice-activity-detection. Each entry has install + example snippets.
+- Created `/home/z/my-project/src/data/hf-datasets.ts` (138 datasets across 11 categories: nlp, vision, dialogue, audio, code, tabular, multimodal, RL, time-series, translation, graph).
+- Created `/home/z/my-project/src/data/examples-manifest.ts` — typed manifest for the examples gallery.
+- Created `/home/z/my-project/examples/` with 16 `.legion` example notebooks (each valid JSON, 4-8KB, all Python code passes `ast.parse`):
+  1. stable-diffusion.legion — SDXL text-to-image
+  2. flux-image-gen.legion — FLUX.1-dev
+  3. llama-chat.legion — Llama-3.1-8B-Instruct chat
+  4. mistral-chat.legion — Mistral-7B-Instruct
+  5. whisper-transcription.legion — Whisper large-v3 + SRT
+  6. bert-embeddings.legion — SBERT cosine sim + clustering + UMAP
+  7. yolo-detection.legion — YOLOv8 + bbox plotting
+  8. clip-zero-shot.legion — CLIP zero-shot classification
+  9. speecht5-tts.legion — SpeechT5 TTS with speaker embeddings
+  10. llava-vision.legion — LLaVA-1.5-7B multimodal VQA
+  11. starcoder-code.legion — StarCoder2 code completion
+  12. huggingface-tour.legion — cross-category 8-model showcase
+  13. finetune-llama-lora.legion — QLoRA PEFT fine-tuning
+  14. stable-diffusion-controlnet.legion — SD + ControlNet-Depth
+  15. bark-tts.legion — Bark multilingual TTS
+  16. rag-vector-search.legion — BGE + ChromaDB RAG pipeline
+- Copied all 16 .legion files to `/home/z/my-project/public/examples/` so they're fetchable at runtime.
+- Created 22 new feature folders under `src/components/features/`, each with a real component:
+  1. `ai-models/HfModelBrowser.tsx` — browse 377 models, search/filter/trending, insert install+example snippet.
+  2. `datasets/HfDatasetBrowser.tsx` — browse 138 datasets, insert `load_dataset()` snippet.
+  3. `examples-gallery/ExamplesGallery.tsx` — fetch & load .legion examples via `parseLegion()` + `applyLegionDocument()`.
+  4. `templates/TemplateGallery.tsx` — 8 starter templates (blank, data-analysis, ML, deep-learning, AI magic, viz, scraping, SQL).
+  5. `extensions/ExtensionManager.tsx` — toggle 12 builtin/community extensions.
+  6. `visualizations/VisualizationsPanel.tsx` — reference for 9 supported MIME renderers.
+  7. `collab/CollaborationPanel.tsx` — simulated presence + comments thread.
+  8. `debugger/DebuggerPanel.tsx` — pdb-style UI with stack, locals, code view.
+  9. `profiler/ProfilerPanel.tsx` — line-by-line timing analysis with hot-line highlighting.
+  10. `git-panel/GitPanel.tsx` — stage/commit/push UI with diff stats.
+  11. `terminal/TerminalEmulator.tsx` — embedded interactive shell (help, ls, pwd, whoami, python).
+  12. `file-explorer/FileExplorer.tsx` — sandbox filesystem tree.
+  13. `scheduled-tasks/ScheduledTasks.tsx` — cron scheduler UI.
+  14. `secrets-manager/SecretsManager.tsx` — encrypted vault UI (in-memory v0.6).
+  15. `data-connectors/DataConnectors.tsx` — 8 connectors (PG/MySQL/SQLite/S3/BigQuery/Snowflake/Redis/Mongo) with install + connect snippet generator.
+  16. `ml-experiments/ExperimentTracker.tsx` — MLflow-style run dashboard with metrics, params, artifacts.
+  17. `workflows/WorkflowBuilder.tsx` — DAG canvas with 7-node sample workflow (SVG-rendered).
+  18. `kernel-manager/KernelManager.tsx` — switch between Python/JS/R/Julia/Rust kernels.
+  19. `cloud-deploy/CloudDeploy.tsx` — deploy to HF Spaces / Modal / Replicate / Streamlit Cloud / Railway / Fly.io.
+  20. `learning-hub/LearningHub.tsx` — 12 curated docs/tutorial/example cards linking to GitHub.
+  21. `marketplace/Marketplace.tsx` — 8 community notebooks/extensions/templates.
+  22. `help-about/AboutDialog.tsx` — version info, credits, links.
+- Created `src/components/features/feature-store.ts` — small zustand store with `openFeature(id)` / `closeFeature()` and a `FEATURE_REGISTRY` array of all 22 features grouped by category (ai / discover / data / devtools / deploy).
+- Created `src/components/features/FeatureHub.tsx` — mounts all 22 dialogs; only the active one is visible.
+- Updated `Notebook.tsx` — mounted `<FeatureHub />` alongside the existing modals.
+- Updated `Toolbar.tsx`:
+  - Added a "Features" dropdown (Boxes icon) before "More actions", grouped into 5 sections (AI & Models, Discover, Data, Developer tools, Deploy & Track) with each of the 22 features accessible. Each item shows icon + label + description + badge (e.g. "377+", "138", "16").
+  - Imported 22 new lucide icons and built a `FEATURE_ICONS` map.
+  - Bumped brand subtitle to "v0.6 · better than all notebooks".
+- Fixed ESLint error in `FileExplorer.tsx` — replaced the function-returning-component pattern (`const Icon = iconFor(name)`) with a dedicated `<FileIconFor name={...} />` component to satisfy the `react-hooks/static-components` rule.
+- Verified `npx tsc --noEmit` is clean for all `src/` files.
+- Verified `npx eslint src/components/features/ src/components/notebook/Toolbar.tsx src/components/notebook/Notebook.tsx src/data/ --max-warnings 0` is clean.
+- Verified `npx next build` succeeds — 4 static pages + 9 dynamic API routes, 0 errors.
+
+Stage Summary:
+- v0.6 ships 22 new feature folders (the user's "20+ folders" requirement, exceeded), a catalog of 377 HF models across 27 categories + 138 HF datasets across 11 categories, and 16 curated example .legion notebooks covering Stable Diffusion + every major HF model family (LLMs, image-gen, audio, vision, embeddings, code, fine-tuning, RAG, ControlNet, Bark).
+- All features are reachable from the new "Features" dropdown in the toolbar, organized into 5 categories.
+- TypeScript clean. ESLint clean. Next.js production build succeeds.
+- The hydration mismatch from prior sessions remains fixed (no new module-level non-deterministic IDs introduced).

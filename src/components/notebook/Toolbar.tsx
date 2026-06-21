@@ -43,6 +43,28 @@ import {
   BarChart3,
   Eraser,
   MoreVertical,
+  Boxes,
+  Database,
+  BookOpen,
+  LayoutTemplate,
+  Puzzle,
+  Store,
+  GraduationCap,
+  Info,
+  Plug,
+  FolderTree,
+  KeyRound,
+  Bug,
+  Gauge,
+  GitBranch,
+  Terminal as TerminalIcon,
+  CalendarClock,
+  FlaskConical,
+  Workflow,
+  Cpu,
+  Cloud,
+  Users,
+  LineChart,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useNotebookStore } from "@/lib/notebook-store";
@@ -66,6 +88,32 @@ import {
 import { cn } from "@/lib/utils";
 import type { KernelStatus } from "@/types/notebook";
 import { SandboxPicker } from "./SandboxPicker";
+import { FEATURE_REGISTRY, useFeatureStore, type FeatureId } from "../features/feature-store";
+
+const FEATURE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  Boxes,
+  Database,
+  BookOpen,
+  LayoutTemplate,
+  Puzzle,
+  Store,
+  GraduationCap,
+  Info,
+  Plug,
+  FolderTree,
+  KeyRound,
+  Bug,
+  Gauge,
+  GitBranch,
+  Terminal: TerminalIcon,
+  CalendarClock,
+  FlaskConical,
+  Workflow,
+  Cpu,
+  Cloud,
+  Users,
+  LineChart,
+};
 
 export function Toolbar() {
   const title = useNotebookStore((s) => s.title);
@@ -103,6 +151,7 @@ export function Toolbar() {
   const dirty = useNotebookStore((s) => s.dirty);
 
   const { setTheme } = useTheme();
+  const openFeature = useFeatureStore((s) => s.openFeature);
 
   const isBusy = kernelStatus === "busy";
   const isStarting = isStartingKernel || kernelStatus === "starting";
@@ -123,7 +172,7 @@ export function Toolbar() {
               </span>
             </div>
             <span className="text-[10px] text-muted-foreground/70">
-              v0.5 · better than all notebooks
+              v0.6 · better than all notebooks
             </span>
           </div>
         </div>
@@ -350,6 +399,61 @@ export function Toolbar() {
                 Notebook statistics
               </TooltipContent>
             </Tooltip>
+
+            {/* Features dropdown (v0.6) — 22 feature panels */}
+            <DropdownMenu>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="icon" variant="ghost" className="h-8 w-8">
+                        <Boxes className="h-3.5 w-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-[11px]">
+                    Features (22 panels)
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <DropdownMenuContent align="end" className="w-72 max-h-[70vh] overflow-auto">
+                {(["ai", "discover", "data", "devtools", "deploy"] as const).map((group, gi) => (
+                  <div key={group}>
+                    {gi > 0 && <DropdownMenuSeparator />}
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {group === "ai" && "AI & Models"}
+                      {group === "discover" && "Discover"}
+                      {group === "data" && "Data"}
+                      {group === "devtools" && "Developer tools"}
+                      {group === "deploy" && "Deploy & Track"}
+                    </DropdownMenuLabel>
+                    {FEATURE_REGISTRY.filter((f) => f.category === group).map((f) => {
+                      const Icon = FEATURE_ICONS[f.icon] ?? Boxes;
+                      return (
+                        <DropdownMenuItem
+                          key={f.id}
+                          onClick={() => openFeature(f.id as FeatureId)}
+                          className="gap-2"
+                        >
+                          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                          <div className="flex min-w-0 flex-1 flex-col">
+                            <span className="text-[12px] font-medium">{f.label}</span>
+                            <span className="truncate text-[10px] text-muted-foreground">
+                              {f.description}
+                            </span>
+                          </div>
+                          {f.badge && (
+                            <Badge variant="secondary" className="text-[9px]">
+                              {f.badge}
+                            </Badge>
+                          )}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </div>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* More actions: clear all outputs (v0.5) */}
             <DropdownMenu>

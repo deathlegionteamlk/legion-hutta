@@ -57,7 +57,8 @@ server.log
 /tool-results/
 /upload/
 /download/
-/examples/
+# Exclude only the broken websocket example, keep all .legion notebooks + manifest
+/examples/websocket/
 /mini-services/
 *.pid
 python-backend/__pycache__/
@@ -74,3 +75,6 @@ db/*.db-journal
 .zscripts/dev.pid
 db/*.db
 db/*.db-journal
+
+# Agent context (internal work notes, not user-facing)
+/agent-ctx/

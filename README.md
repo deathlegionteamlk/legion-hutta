@@ -20,6 +20,17 @@ variables inspector, a command palette, and a public v1 API for agentic AIs.
 - **Persistent kernel state** — variables, imports, and module-level mutations survive across cells.
 - **Execution metadata** — execution count, wall-clock time per cell, error state.
 
+### v0.6 — HuggingFace catalog + 22 feature panels + 16 example notebooks
+- **HuggingFace Model Browser** — browse **377+ models across 27 categories** (text-gen, image-gen, speech-recognition, text-to-speech, image-classification, object-detection, text/token classification, translation, summarization, QA, embeddings, vision-language, code-gen, depth-estimation, image-segmentation, video-classification, text-to-video, RL, tabular, time-series, audio-classification, feature-extraction, zero-shot, image-to-image, unconditional-image-gen, voice-activity-detection). One click inserts the install + example snippet into your notebook.
+- **HuggingFace Dataset Browser** — browse **138 datasets across 11 categories** (nlp, vision, dialogue, audio, code, tabular, multimodal, RL, time-series, translation, graph). One click inserts a `load_dataset()` snippet.
+- **Examples Gallery** — 16 curated `.legion` notebooks covering Stable Diffusion, FLUX, Llama-3.1, Mistral, Whisper, BERT, YOLOv8, CLIP, SpeechT5, LLaVA, StarCoder2, Bark, RAG with BGE+Chroma, QLoRA fine-tuning, SD+ControlNet, and an 8-model cross-category tour. One click loads the notebook into the editor.
+- **22 new feature panels** accessible from the toolbar's new "Features" dropdown, grouped into 5 categories:
+  - **AI & Models**: HuggingFace Models, HuggingFace Datasets, Example Notebooks.
+  - **Discover**: Templates, Extensions, Marketplace, Learning Hub, About.
+  - **Data**: Data Connectors (PG/MySQL/SQLite/S3/BigQuery/Snowflake/Redis/Mongo), File Explorer, Secrets Manager.
+  - **Developer tools**: Debugger, Profiler, Terminal, Git Panel, Kernel Manager (Python/JS/R/Julia/Rust), Visualizations, Workflow Builder (DAG canvas), Scheduled Tasks.
+  - **Deploy & Track**: ML Experiments (MLflow-style tracker), Cloud Deploy (HF Spaces/Modal/Replicate/Streamlit/Railway/Fly.io), Collaboration (presence + comments).
+
 ### v0.5 — Productivity & analytics
 - **Cell bookmarks** — star important cells (`Shift+B` or the star icon in the cell hover toolbar). Bookmarks appear in a dedicated section at the top of the Outline panel.
 - **Snippets library** (`Ctrl+Shift+K`) — modal dialog with quick-insert code patterns: imports, CSV loading, plots, function templates, `%%ai` prompts, markdown sections, benchmark scaffolds. Click to insert below the active cell.

@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "yolo-detection.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T09:00:00.000Z",
+    "updated_at": "2026-06-21T09:04:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# YOLOv8 — Object Detection\n\n**Ultralytics YOLOv8** is a real-time object detector. This notebook loads a pretrained `yolov8n.pt` model, runs inference on an image, plots bounding boxes, and exports a JSON list of detections.\n\n## Prerequisites\n\n```bash\npip install ultralytics pillow opencv-python matplotlib\n```\n\n## Notes\n\n- Model: `yolov8n.pt` (nano) — 6 MB, 80 COCO classes. Other sizes: `yolov8s/m/l/x`.\n- Auto-downloads weights on first use.\n- Runs on CPU at ~30 ms/image.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import json\nfrom pathlib import Path\nfrom PIL import Image\nfrom ultralytics import YOLO\n\nprint(\"ultralytics imported\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "# Load pretrained YOLOv8 nano. The .pt file downloads to CWD on first use.\nmodel = YOLO(\"yolov8n.pt\")\nprint(\"classes:\", list(model.names.items())[:5], \"...\", f\"({len(model.names)} total)\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-image",
+      "kind": "code",
+      "source": "# Use any image. If you don't have one, fetch the ultralytics bus.jpg sample.\nIMAGE_PATH = \"bus.jpg\"\nif not Path(IMAGE_PATH).exists():\n    from urllib.request import urlretrieve\n    urlretrieve(\"https://ultralytics.com/images/bus.jpg\", IMAGE_PATH)\n\nImage.open(IMAGE_PATH)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-infer",
+      "kind": "code",
+      "source": "# Run inference. `verbose=False` keeps the output clean.\nresults = model(IMAGE_PATH, conf=0.25, verbose=False)\nr = results[0]\n\nprint(f\"{len(r.boxes)} detections:\")\nfor b in r.boxes:\n    cls = int(b.cls[0])\n    name = model.names[cls]\n    conf = float(b.conf[0])\n    x1, y1, x2, y2 = b.xyxy[0].tolist()\n    print(f\"  {name:10s} conf={conf:.2f}  bbox=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}]\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-plot",
+      "kind": "code",
+      "source": "# Built-in plotting returns an annotated BGR numpy array.\nannotated = r.plot()  # BGR\n\n# Convert BGR -> RGB and show with PIL.\nimg = Image.fromarray(annotated[..., ::-1])\nimg.save(\"yolo_annotated.jpg\")\nprint(\"saved yolo_annotated.jpg\")\nimg",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-json",
+      "kind": "code",
+      "source": "# Export detections as JSON.\ndetections = []\nfor b in r.boxes:\n    x1, y1, x2, y2 = b.xyxy[0].tolist()\n    detections.append({\n        \"class\": model.names[int(b.cls[0])],\n        \"confidence\": float(b.conf[0]),\n        \"bbox_xyxy\": [round(v, 1) for v in (x1, y1, x2, y2)],\n    })\n\nPath(\"detections.json\").write_text(json.dumps(detections, indent=2))\nprint(json.dumps(detections, indent=2))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-video",
+      "kind": "code",
+      "source": "# Run on a video (or webcam stream) and write annotated output.\n# video = model.predict(source=\"input.mp4\", save=True, conf=0.3, verbose=False)\n# print(\"saved to:\", video[0].save_dir)\nprint(\"Uncomment the lines above to process a video file.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-batch",
+      "kind": "code",
+      "source": "# Batch inference — pass a list of paths.\nbatch = [IMAGE_PATH, IMAGE_PATH]  # replace with different files\nbatch_results = model(batch, conf=0.25, verbose=False)\n\nfor i, r in enumerate(batch_results):\n    print(f\"image {i}: {len(r.boxes)} objects, saved ->\", r.save_dir if hasattr(r, 'save_dir') else 'n/a')",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

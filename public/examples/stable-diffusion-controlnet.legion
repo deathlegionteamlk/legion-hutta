@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "stable-diffusion-controlnet.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T10:10:00.000Z",
+    "updated_at": "2026-06-21T10:15:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# Stable Diffusion + ControlNet (Depth Conditioning)\n\n**ControlNet** locks the spatial structure of generated images to an external conditioning signal — depth maps, edges, poses, scribbles. This notebook uses a MiDaS depth estimate of an input image as the structural hint, then re-renders it with a brand-new prompt.\n\n## Prerequisites\n\n```bash\npip install diffusers transformers accelerate controlnet_aux torch pillow\n```\n\n## Notes\n\n- Base model: `runwayml/stable-diffusion-v1-5`.\n- ControlNet: `lllyasviel/sd-controlnet-depth`.\n- Depth estimator: `lllyasviel/Annotators` (MiDaS) via `controlnet_aux`.\n- ~10 GB VRAM at fp16.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch\nfrom PIL import Image\nfrom pathlib import Path\nfrom diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler\nfrom controlnet_aux import MidasDetector\n\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nDTYPE = torch.float16 if DEVICE == \"cuda\" else torch.float32\nprint(\"device:\", DEVICE, \"dtype:\", DTYPE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load-image",
+      "kind": "code",
+      "source": "# Load any source image whose structure you want to preserve.\nfrom urllib.request import urlretrieve\nIMAGE_PATH = \"room.jpg\"\nurlretrieve(\"https://huggingface.co/lllyasviel/sd-controlnet-depth/resolve/main/images/room.png\", IMAGE_PATH)\n\nsource = Image.open(IMAGE_PATH).convert(\"RGB\").resize((512, 512))\nsource",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-depth",
+      "kind": "code",
+      "source": "# Estimate depth with MiDaS — this becomes the ControlNet conditioning.\nmidas = MidasDetector.from_pretrained(\"lllyasviel/Annotators\").to(DEVICE)\ndepth_map = midas(source)\n\ndepth_map.save(\"depth.png\")\ndepth_map",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load-pipeline",
+      "kind": "code",
+      "source": "# Load SD 1.5 + ControlNet-Depth in a single pipeline.\ncontrolnet = ControlNetModel.from_pretrained(\"lllyasviel/sd-controlnet-depth\", torch_dtype=DTYPE)\npipe = StableDiffusionControlNetPipeline.from_pretrained(\n    \"runwayml/stable-diffusion-v1-5\",\n    controlnet=controlnet,\n    torch_dtype=DTYPE,\n).to(DEVICE)\n\n# Fast, high-quality scheduler.\npipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)\n\n# Optional memory savings.\nif hasattr(pipe, \"enable_xformers_memory_efficient_attention\"):\n    try:\n        pipe.enable_xformers_memory_efficient_attention()\n    except Exception:\n        pass\n\nprint(\"SD + ControlNet pipeline ready.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-generate",
+      "kind": "code",
+      "source": "# Re-render the SAME depth structure with a totally different prompt.\nprompt = (\n    \"a cozy treehouse interior with wooden furniture, fairy lights, \"\n    \"warm sunset through the window, painterly digital art, highly detailed\"\n)\nnegative = \"lowres, blurry, deformed, extra limbs, text, watermark\"\n\nSEED = 1337\ngenerator = torch.Generator(DEVICE).manual_seed(SEED)\n\nimage = pipe(\n    prompt=prompt,\n    negative_prompt=negative,\n    image=depth_map,\n    num_inference_steps=30,\n    guidance_scale=7.5,\n    generator=generator,\n).images[0]\n\nimage.save(\"controlnet_treehouse.png\")\nimage",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-strength",
+      "kind": "code",
+      "source": "# Sweep controlnet_conditioning_scale: 0 = ignore depth, 2 = slavishly follow it.\nfor scale in (0.5, 1.0, 1.5, 2.0):\n    g = torch.Generator(DEVICE).manual_seed(SEED)\n    img = pipe(\n        prompt=prompt,\n        negative_prompt=negative,\n        image=depth_map,\n        num_inference_steps=25,\n        guidance_scale=7.5,\n        controlnet_conditioning_scale=scale,\n        generator=g,\n    ).images[0]\n    img.save(f\"controlnet_scale_{scale}.png\")\n    print(f\"scale={scale} saved\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-grid",
+      "kind": "code",
+      "source": "# Build a side-by-side comparison grid: source | depth | output.\nfrom PIL import Image as PI\n\nout_files = [\"controlnet_scale_0.5.png\", \"controlnet_scale_1.0.png\",\n             \"controlnet_scale_1.5.png\", \"controlnet_scale_2.0.png\"]\nimgs = [source, depth_map] + [PI.open(f) for f in out_files]\nlabels = [\"source\", \"depth\", \"s=0.5\", \"s=1.0\", \"s=1.5\", \"s=2.0\"]\n\nW, H = 512, 512\ngrid = PI.new(\"RGB\", (W * 3, H * 2), (255, 255, 255))\nfor i, im in enumerate(imgs):\n    grid.paste(im.resize((W, H)), ((i % 3) * W, (i // 3) * H))\n\ngrid.save(\"controlnet_grid.png\")\nprint(\"saved controlnet_grid.png\")\ngrid",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "import gc\ndel pipe, controlnet, midas\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"freed\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

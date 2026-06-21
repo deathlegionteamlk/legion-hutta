@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "llava-vision.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T09:30:00.000Z",
+    "updated_at": "2026-06-21T09:34:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# LLaVA-1.5-7B — Multimodal Vision Q&A\n\n**LLaVA-1.5-7B** is a multimodal chatbot that understands images and text. This notebook loads it with the HuggingFace `transformers` library and runs a few visual Q&A turns.\n\n## Prerequisites\n\n```bash\npip install transformers accelerate torch pillow\n```\n\n## Notes\n\n- Model: `llava-hf/llava-1.5-7b-hf`.\n- ~16 GB VRAM at fp16. Use `device_map=\"auto\"` to offload.\n- The model uses the `LlavaProcessor` to compose text + image tokens.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch\nfrom PIL import Image\nfrom transformers import AutoProcessor, LlavaForConditionalGeneration\n\nMODEL_ID = \"llava-hf/llava-1.5-7b-hf\"\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nDTYPE = torch.float16 if DEVICE == \"cuda\" else torch.float32\nprint(\"device:\", DEVICE, \"dtype:\", DTYPE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "processor = AutoProcessor.from_pretrained(MODEL_ID)\nmodel = LlavaForConditionalGeneration.from_pretrained(\n    MODEL_ID, torch_dtype=DTYPE, device_map=\"auto\", low_cpu_mem_usage=True,\n)\nmodel.eval()\nprint(\"LLaVA loaded.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-image",
+      "kind": "code",
+      "source": "# Load any image. We fetch a sample image from the HF docs.\nfrom urllib.request import urlretrieve\nIMAGE_PATH = \"scene.jpg\"\nurlretrieve(\"https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/idefics_image.jpg\", IMAGE_PATH)\n\nimage = Image.open(IMAGE_PATH).convert(\"RGB\")\nimage",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-prompt",
+      "kind": "code",
+      "source": "# LLaVA prompt format: USER: <image> question ASSISTANT:\nchat = [\n    {\"role\": \"user\", \"content\": [\n        {\"type\": \"image\"},\n        {\"type\": \"text\", \"text\": \"Describe what you see in this image in 3 sentences.\"},\n    ]},\n]\nprompt = processor.apply_chat_template(chat, add_generation_prompt=True)\nprint(repr(prompt[:300]))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-generate",
+      "kind": "code",
+      "source": "inputs = processor(images=image, text=prompt, return_tensors=\"pt\").to(model.device, DTYPE)\n\nwith torch.inference_mode():\n    out = model.generate(**inputs, max_new_tokens=200, do_sample=False)\n\n# Decode only the newly generated tokens.\nreply = processor.decode(out[0, inputs[\"input_ids\"].shape[1]:], skip_special_tokens=True)\nprint(reply)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-qa",
+      "kind": "code",
+      "source": "# Ask follow-up questions about the same image.\nquestions = [\n    \"How many people are in the image?\",\n    \"What is the dominant color palette?\",\n    \"Suggest a one-line caption suitable for Instagram.\",\n]\n\nfor q in questions:\n    chat = [{\"role\": \"user\", \"content\": [{\"type\": \"image\"}, {\"type\": \"text\", \"text\": q}]}]\n    prompt = processor.apply_chat_template(chat, add_generation_prompt=True)\n    inputs = processor(images=image, text=prompt, return_tensors=\"pt\").to(model.device, DTYPE)\n    with torch.inference_mode():\n        out = model.generate(**inputs, max_new_tokens=80, do_sample=False)\n    answer = processor.decode(out[0, inputs[\"input_ids\"].shape[1]:], skip_special_tokens=True)\n    print(f\"Q: {q}\\nA: {answer.strip()}\\n\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-multi-image",
+      "kind": "code",
+      "source": "# LLaVA-1.5 supports a single image per turn. To compare two images, ask separately.\nimg_a = Image.open(IMAGE_PATH).convert(\"RGB\")\nimg_b = img_a.rotate(180)  # upside-down variant for demo\n\ndef ask(img, q):\n    chat = [{\"role\": \"user\", \"content\": [{\"type\": \"image\"}, {\"type\": \"text\", \"text\": q}]}]\n    prompt = processor.apply_chat_template(chat, add_generation_prompt=True)\n    inputs = processor(images=img, text=prompt, return_tensors=\"pt\").to(model.device, DTYPE)\n    with torch.inference_mode():\n        out = model.generate(**inputs, max_new_tokens=80, do_sample=False)\n    return processor.decode(out[0, inputs[\"input_ids\"].shape[1]:], skip_special_tokens=True).strip()\n\nprint(\"A:\", ask(img_a, \"What is the orientation of this image?\"))\nprint(\"B:\", ask(img_b, \"What is the orientation of this image?\"))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "import gc\ndel model\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"freed\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

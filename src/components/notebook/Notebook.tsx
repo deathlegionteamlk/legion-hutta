@@ -44,6 +44,7 @@ import { ShortcutsHelp } from "./ShortcutsHelp";
 import { StatusBar } from "./StatusBar";
 import { SnippetsLibrary } from "./SnippetsLibrary";
 import { NotebookStats } from "./NotebookStats";
+import { FeatureHub } from "../features/FeatureHub";
 
 export function Notebook() {
   const cells = useNotebookStore((s) => s.cells);
@@ -395,6 +396,7 @@ export function Notebook() {
       <ShortcutsHelp />
       <SnippetsLibrary />
       <NotebookStats />
+      <FeatureHub />
     </div>
   );
 }

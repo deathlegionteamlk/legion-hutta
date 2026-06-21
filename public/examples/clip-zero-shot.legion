@@ -1,0 +1,64 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "clip-zero-shot.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T09:10:00.000Z",
+    "updated_at": "2026-06-21T09:14:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# CLIP — Zero-Shot Image Classification\n\n**OpenAI CLIP** (`openai/clip-vit-base-patch32`) maps images and text into a shared 512-dim embedding space. This notebook classifies images by computing similarity between image embeddings and a set of candidate class prompts — **no training required**.\n\n## Prerequisites\n\n```bash\npip install transformers torch pillow requests\n```\n\n## Notes\n\n- Model: `openai/clip-vit-base-patch32` (~600 MB).\n- Works on CPU; ~150 ms per image.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch\nfrom PIL import Image\nfrom transformers import CLIPProcessor, CLIPModel\n\nMODEL_ID = \"openai/clip-vit-base-patch32\"\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nprint(\"device:\", DEVICE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "model = CLIPModel.from_pretrained(MODEL_ID).to(DEVICE).eval()\nprocessor = CLIPProcessor.from_pretrained(MODEL_ID)\nprint(\"CLIP loaded. visual proj dim:\", model.visual_projection.out_features)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load-image",
+      "kind": "code",
+      "source": "# Load any image. We'll fetch a sample from the transformers docs.\nfrom urllib.request import urlretrieve\nIMAGE_PATH = \"cats.jpg\"\nurlretrieve(\"https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/beaver.png\", IMAGE_PATH)\n\nimage = Image.open(IMAGE_PATH).convert(\"RGB\")\nimage",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-zero-shot",
+      "kind": "code",
+      "source": "# Define candidate classes. Use prompt templates to bias toward natural-language priors.\nCLASSES = [\"a beaver\", \"a dog\", \"a cat\", \"a bear\", \"a river\", \"a building\"]\nPROMPTS = [f\"a photo of {c}\" for c in CLASSES]\n\ninputs = processor(text=PROMPTS, images=image, return_tensors=\"pt\", padding=True).to(DEVICE)\n\nwith torch.inference_mode():\n    outputs = model(**inputs)\n\nlogits = outputs.logits_per_image.softmax(dim=-1).squeeze(0).cpu()\nfor cls, score in sorted(zip(CLASSES, logits), key=lambda x: -x[1]):\n    print(f\"  {score*100:5.1f}%  {cls}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-templates",
+      "kind": "code",
+      "source": "# Prompt ensembling: average over many templates for a more stable classifier.\nimport itertools\n\ntemplates = [\n    \"a photo of {}\",\n    \"a blurry photo of {}\",\n    \"a centered satellite photo of {}\",\n    \"a photo of a large {}\",\n    \"a photo of a small {}\",\n]\n\ndef zero_shot(image, classes, templates):\n    prompts = list(itertools.chain.from_iterable(t.format(c) for c in classes) for t in templates)\n    # Simpler: build [t.format(c) for t in templates for c in classes]\n    prompts = [t.format(c) for t in templates for c in classes]\n    inputs = processor(text=prompts, images=image, return_tensors=\"pt\", padding=True).to(DEVICE)\n    with torch.inference_mode():\n        logits = model(**inputs).logits_per_image  # [1, n_prompts]\n    # Reshape to [n_templates, n_classes] and average.\n    scores = logits.view(len(templates), len(classes)).mean(dim=0).softmax(dim=-1)\n    return scores.cpu()\n\nscores = zero_shot(image, CLASSES, templates)\nfor cls, score in sorted(zip(CLASSES, scores), key=lambda x: -x[1]):\n    print(f\"  {score*100:5.1f}%  {cls}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-multi-image",
+      "kind": "code",
+      "source": "# Batch-classify multiple images at once.\nfrom pathlib import Path\nimage_paths = [IMAGE_PATH, IMAGE_PATH]  # replace with real variety\nimages = [Image.open(p).convert(\"RGB\") for p in image_paths]\n\ninputs = processor(text=[f\"a photo of {c}\" for c in CLASSES], images=images,\n                   return_tensors=\"pt\", padding=True).to(DEVICE)\nwith torch.inference_mode():\n    logits = model(**inputs).logits_per_image.softmax(dim=-1).cpu()\n\nfor i, row in enumerate(logits):\n    best = CLASSES[row.argmax()]\n    print(f\"image {i}: best='{best}' (p={row.max():.2f})\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

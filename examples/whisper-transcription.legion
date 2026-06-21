@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "whisper-transcription.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T08:40:00.000Z",
+    "updated_at": "2026-06-21T08:44:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# Whisper large-v3 — Audio Transcription\n\n**OpenAI Whisper large-v3** is a state-of-the-art multilingual ASR model. This notebook transcribes an audio file with word-level timestamps and writes an SRT subtitle file.\n\n## Prerequisites\n\n```bash\npip install transformers accelerate torch librosa soundfile\n```\n\n## Notes\n\n- Model: `openai/whisper-large-v3`.\n- Audio must be 16 kHz mono. `librosa.load(..., sr=16000, mono=True)` handles resampling.\n- ~10 GB VRAM at fp16.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch, librosa, soundfile as sf\nfrom pathlib import Path\nfrom transformers import AutoProcessor, AutoModelForSpeechSeq2Seq\n\nMODEL_ID = \"openai/whisper-large-v3\"\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nDTYPE = torch.float16 if DEVICE == \"cuda\" else torch.float32\nprint(\"device:\", DEVICE, \"dtype:\", DTYPE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "processor = AutoProcessor.from_pretrained(MODEL_ID)\nmodel = AutoModelForSpeechSeq2Seq.from_pretrained(\n    MODEL_ID, torch_dtype=DTYPE, device_map=\"auto\", low_cpu_mem_usage=True,\n)\nmodel.eval()\nprint(\"Whisper loaded.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load-audio",
+      "kind": "code",
+      "source": "# Replace with any audio file (mp3, wav, flac...). librosa decodes + resamples.\nAUDIO_PATH = \"sample.wav\"  # <-- put your file here\n\naudio, sr = librosa.load(AUDIO_PATH, sr=16000, mono=True)\nduration_s = len(audio) / sr\nprint(f\"loaded {AUDIO_PATH}: {duration_s:.1f}s @ {sr} Hz, dtype={audio.dtype}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-transcribe",
+      "kind": "code",
+      "source": "# Transcribe with language auto-detection.\ninputs = processor(audio, sampling_rate=16000, return_tensors=\"pt\").to(model.device)\n\nwith torch.inference_mode():\n    generated_ids = model.generate(\n        **inputs,\n        max_new_tokens=440,\n        task=\"transcribe\",\n        language=None,           # auto-detect\n        return_timestamps=True,  # chunk-level timestamps\n        num_beams=1,\n    )\n\ntext = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]\nprint(text[:600])",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-chunks",
+      "kind": "code",
+      "source": "# Inspect chunk-level timestamps from the decoded output.\nresult = processor.batch_decode(generated_ids, skip_special_tokens=False, decode_with_timestamps=True)[0]\nprint(repr(result[:400]))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-long-form",
+      "kind": "code",
+      "source": "# For long audio (>30s), use pipeline with chunking for stable results.\nfrom transformers import pipeline\n\nasr = pipeline(\n    \"automatic-speech-recognition\",\n    model=model,\n    tokenizer=processor.tokenizer,\n    feature_extractor=processor.feature_extractor,\n    chunk_length_s=30,\n    stride_length_s=[6, 6],\n    device=0 if DEVICE == \"cuda\" else -1,\n    torch_dtype=DTYPE,\n)\n\nout = asr(audio, return_timestamps=\"word\")\nprint(\"segments:\", len(out[\"chunks\"]))\nprint(\"first words:\", out[\"chunks\"][:5])",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-srt",
+      "kind": "code",
+      "source": "# Convert word timestamps into an SRT subtitle file.\ndef fmt(t):\n    h = int(t // 3600); m = int((t % 3600) // 60); s = int(t % 60); ms = int((t - int(t)) * 1000)\n    return f\"{h:02d}:{m:02d}:{s:02d},{ms:03d}\"\n\nlines = []\nfor i, c in enumerate(out[\"chunks\"], 1):\n    start, end = c[\"timestamp\"]\n    lines.append(f\"{i}\\n{fmt(start)} --> {fmt(end)}\\n{c['text'].strip()}\\n\")\n\nPath(\"transcript.srt\").write_text(\"\\n\".join(lines), encoding=\"utf-8\")\nprint(\"wrote transcript.srt\")\nprint(\"\\n\".join(lines[:6]))",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-translate",
+      "kind": "code",
+      "source": "# Translate non-English audio to English with task='translate'.\nwith torch.inference_mode():\n    en_ids = model.generate(**inputs, max_new_tokens=440, task=\"translate\", num_beams=1)\nprint(\"EN:\", processor.batch_decode(en_ids, skip_special_tokens=True)[0][:300])",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "rag-vector-search.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T10:30:00.000Z",
+    "updated_at": "2026-06-21T10:36:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# RAG — Vector Search with BGE Embeddings + ChromaDB\n\nA self-contained **Retrieval-Augmented Generation** pipeline: chunk a small text corpus, embed it with `BAAI/bge-small-en-v1.5`, store vectors in ChromaDB, retrieve top-k chunks for a query, and synthesize an answer with an LLM.\n\n## Prerequisites\n\n```bash\npip install chromadb sentence-transformers transformers torch\n```\n\n## Notes\n\n- Embedding model: `BAAI/bge-small-en-v1.5` (130 MB, 384-dim, strong on MTEB).\n- Vector store: `chromadb` (in-process, file-backed).\n- Generator: any causal LM — this notebook uses `google/flan-t5-base` for CPU-friendliness.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch, uuid\nfrom pathlib import Path\nimport chromadb\nfrom sentence_transformers import SentenceTransformer\n\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nprint(\"device:\", DEVICE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-corpus",
+      "kind": "code",
+      "source": "# A tiny knowledge base — replace with your own docs (markdown, PDF text, etc.).\nDOCUMENTS = [\n    \"Legion Hutta is a web-based notebook application built with Next.js 16 and a FastAPI Python backend.\",\n    \"The .legion file format is JSON-based and carries cells, kernel metadata, and optional AI history.\",\n    \"Legion Hutta supports multiple language kernels via a BaseKernel abstract class.\",\n    \"The Python kernel uses a long-lived subprocess running a JSON-over-stdio REPL.\",\n    \"Notebooks can be exported to .ipynb format with the legionToIpynb() function.\",\n    \"Auto-save runs every 30 seconds when the notebook has unsaved changes.\",\n    \"Cells support bookmarks, tags, code collapsing, and execution-time tracking.\",\n    \"The Legion Hutta repo is public at github.com/deathlegionteamlk/legion-hutta under the MIT license.\",\n    \"Stable Diffusion XL generates 1024x1024 images using a UNet + text encoder pipeline.\",\n    \"Whisper large-v3 transcribes audio in 30-second chunks with word-level timestamps.\",\n]\nprint(f\"corpus: {len(DOCUMENTS)} documents\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-embedder",
+      "kind": "code",
+      "source": "# Load BGE-small. BGE expects a query prefix when embedding queries (not docs).\nembedder = SentenceTransformer(\"BAAI/bge-small-en-v1.5\", device=DEVICE)\nEMB_DIM = embedder.get_sentence_embedding_dimension()\nprint(\"embedding dim:\", EMB_DIM)\n\nQUERY_PREFIX = \"Represent this sentence for searching relevant passages: \"\n\ndef embed_docs(texts):\n    return embedder.encode(texts, convert_to_tensor=False, normalize_embeddings=True)\n\ndef embed_query(q):\n    return embedder.encode([QUERY_PREFIX + q], convert_to_tensor=False, normalize_embeddings=True)[0]",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-chroma",
+      "kind": "code",
+      "source": "# Create a persistent Chroma collection. Stored under ./chroma_db.\nclient = chromadb.PersistentClient(path=str(Path(\"./chroma_db\")))\ncollection = client.get_or_create_collection(\n    name=\"legion_kb\",\n    metadata={\"hnsw:space\": \"cosine\"},\n)\n\n# Embed + upsert documents.\nvecs = embed_docs(DOCUMENTS)\nids = [f\"doc-{i}\" for i in range(len(DOCUMENTS))]\ncollection.upsert(\n    ids=ids,\n    embeddings=vecs.tolist(),\n    documents=DOCUMENTS,\n    metadatas=[{\"source\": \"legion-docs\", \"idx\": i} for i in range(len(DOCUMENTS))],\n)\nprint(f\"indexed {collection.count()} documents\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-retrieve",
+      "kind": "code",
+      "source": "# Retrieve top-k chunks for a query.\ndef retrieve(query, k=3):\n    q_vec = embed_query(query)\n    res = collection.query(query_embeddings=[q_vec.tolist()], n_results=k)\n    return list(zip(res[\"documents\"][0], res[\"distances\"][0], res[\"ids\"][0]))\n\nfor q in [\n    \"What file format does Legion Hutta use?\",\n    \"How does the Python kernel work?\",\n    \"How often does auto-save run?\",\n]:\n    print(f\"\\nQ: {q}\")\n    for doc, dist, did in retrieve(q):\n        print(f\"  ({dist:.3f}) [{did}] {doc[:80]}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-generator",
+      "kind": "code",
+      "source": "# Load a small generator for answer synthesis.\nfrom transformers import AutoModelForSeq2SeqLM, AutoTokenizer as ATok\n\nGEN_ID = \"google/flan-t5-base\"\ngen_tok = ATok.from_pretrained(GEN_ID)\ngen = AutoModelForSeq2SeqLM.from_pretrained(GEN_ID, torch_dtype=torch.float32).to(DEVICE).eval()\nprint(\"generator loaded:\", GEN_ID)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-rag",
+      "kind": "code",
+      "source": "# End-to-end RAG: retrieve -> build prompt -> generate.\ndef rag_answer(question, k=3, max_new=120):\n    hits = retrieve(question, k=k)\n    context = \"\\n\".join(f\"[{i+1}] {h[0]}\" for i, h in enumerate(hits))\n    prompt = (\n        \"Answer the question using only the context below. \"\n        \"If the context is insufficient, say 'I don't know.\\n\\n\"\n        f\"Context:\\n{context}\\n\\nQuestion: {question}\\nAnswer:\"\n    )\n    inputs = gen_tok(prompt, return_tensors=\"pt\").to(DEVICE)\n    with torch.inference_mode():\n        out = gen.generate(**inputs, max_new_tokens=max_new, do_sample=False)\n    answer = gen_tok.decode(out[0], skip_special_tokens=True).strip()\n    return answer, [h[0] for h in hits]\n\nfor q in [\n    \"What is the .legion file format?\",\n    \"How is the Python kernel implemented?\",\n    \"Where can I find the source code?\",\n]:\n    ans, sources = rag_answer(q)\n    print(f\"\\nQ: {q}\")\n    print(f\"A: {ans}\")\n    print(\"sources:\")\n    for i, s in enumerate(sources, 1):\n        print(f\"  [{i}] {s[:80]}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "# Wipe the test collection (optional — keep it if you want to query later).\nclient.delete_collection(\"legion_kb\")\nprint(\"collection deleted.\")\n\nimport gc\ndel embedder, gen\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"done\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

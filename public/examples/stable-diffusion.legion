@@ -1,0 +1,71 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "stable-diffusion.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T08:00:00.000Z",
+    "updated_at": "2026-06-21T08:05:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro-1",
+      "kind": "markdown",
+      "source": "# Stable Diffusion XL — Text-to-Image\n\nThis notebook shows how to generate high-quality images from text prompts using **SDXL 1.0** via the `diffusers` library. It covers prompt variations, negative prompts, deterministic seeds, and saving outputs to disk.\n\n## Prerequisites\n\n```bash\npip install diffusers transformers accelerate safetensors torch pillow\n```\n\n## Model card\n\n- `stabilityai/stable-diffusion-xl-base-1.0` — base image generation\n- `stabilityai/stable-diffusion-xl-refiner-1.0` — optional high-res refiner\n\n> A GPU with >= 16 GB VRAM is recommended. SDXL also works on CPU but is very slow.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch\nfrom diffusers import StableDiffusionXLPipeline\nfrom pathlib import Path\n\nprint(\"torch:\", torch.__version__)\nprint(\"cuda available:\", torch.cuda.is_available())\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nDTYPE = torch.float16 if DEVICE == \"cuda\" else torch.float32\nprint(\"device:\", DEVICE, \"dtype:\", DTYPE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load-pipeline",
+      "kind": "code",
+      "source": "# Load the SDXL base pipeline. The first load downloads ~7 GB of weights.\npipe = StableDiffusionXLPipeline.from_pretrained(\n    \"stabilityai/stable-diffusion-xl-base-1.0\",\n    torch_dtype=DTYPE,\n    variant=\"fp16\" if DTYPE == torch.float16 else None,\n    use_safetensors=True,\n)\npipe = pipe.to(DEVICE)\n\n# Disable the NSFW checker — it can produce false positives on artistic prompts.\n# (You are responsible for using this responsibly.)\nif hasattr(pipe, \"safety_checker\"):\n    pipe.safety_checker = None\nprint(\"SDXL pipeline ready on\", DEVICE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-basic-gen",
+      "kind": "code",
+      "source": "# Basic generation: a single prompt with a fixed seed for reproducibility.\nSEED = 42\ngenerator = torch.Generator(device=DEVICE).manual_seed(SEED)\n\nprompt = \"a cyberpunk city at night, neon reflections on wet streets, cinematic lighting, ultra detailed\"\nimage = pipe(\n    prompt=prompt,\n    negative_prompt=\"lowres, blurry, watermark, jpeg artifacts, deformed hands\",\n    num_inference_steps=30,\n    guidance_scale=7.5,\n    generator=generator,\n).images[0]\n\nimage",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-prompt-variations",
+      "kind": "code",
+      "source": "# Generate variations of the same prompt by varying the seed.\n# Re-using the pipeline keeps weights in VRAM, so each extra image costs only ~3s on an A100.\nbase_prompt = \"a serene mountain lake at sunrise, soft mist, golden light, photo-realistic\"\n\nfor seed in (1, 2, 3):\n    g = torch.Generator(device=DEVICE).manual_seed(seed)\n    img = pipe(\n        prompt=base_prompt,\n        negative_prompt=\"people, text, watermark\",\n        num_inference_steps=25,\n        guidance_scale=7.0,\n        generator=g,\n    ).images[0]\n    print(f\"seed={seed} size={img.size}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-save-images",
+      "kind": "code",
+      "source": "# Persist outputs to disk for reproducibility.\nout_dir = Path(\"sdxl_outputs\")\nout_dir.mkdir(exist_ok=True)\n\nfor seed in (11, 22, 33):\n    g = torch.Generator(device=DEVICE).manual_seed(seed)\n    img = pipe(prompt=base_prompt, generator=g, num_inference_steps=25).images[0]\n    fp = out_dir / f\"mountain_lake_seed{seed}.png\"\n    img.save(fp)\n    print(\"saved\", fp)\n\n# List saved files.\nlist(out_dir.iterdir())",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-refiner",
+      "kind": "code",
+      "source": "# Optional: chain the SDXL refiner for higher-fidelity high-res outputs.\nfrom diffusers import StableDiffusionXLImg2ImgPipeline\n\nrefiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(\n    \"stabilityai/stable-diffusion-xl-refiner-1.0\",\n    torch_dtype=DTYPE,\n    use_safetensors=True,\n).to(DEVICE)\n\nrefined = refiner(\n    prompt=base_prompt,\n    image=image.resize((1536, 1536)),\n    strength=0.3,\n    num_inference_steps=20,\n    guidance_scale=5.0,\n).images[0]\n\nrefined",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "# Free VRAM between sessions.\nimport gc\ndel pipe, refiner\ngc.collect()\nif torch.cuda.is_available():\n    torch.cuda.empty_cache()\nprint(\"VRAM freed.\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "flux-image-gen.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T08:10:00.000Z",
+    "updated_at": "2026-06-21T08:14:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# FLUX.1-dev — Text-to-Image\n\n**FLUX.1** [dev] is Black Forest Labs' 12-billion-parameter rectified-flow transformer, delivering best-in-class prompt adherence and text rendering. This notebook runs it via `diffusers`.\n\n## Prerequisites\n\n```bash\npip install diffusers transformers accelerate safetensors torch sentencepiece protobuf pillow\n```\n\n## Notes\n\n- Model: `black-forest-labs/FLUX.1-dev` (gated — accept the license on the HF Hub).\n- Login with `huggingface-cli login`.\n- ~24 GB VRAM at fp16; can offload to CPU with `enable_model_cpu_offload()`.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch\nfrom diffusers import FluxPipeline\nfrom pathlib import Path\n\nprint(\"torch:\", torch.__version__, \"cuda:\", torch.cuda.is_available())\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "# Load FLUX.1-dev in fp16. CPU offload lets you run on a single 24 GB GPU.\npipe = FluxPipeline.from_pretrained(\n    \"black-forest-labs/FLUX.1-dev\",\n    torch_dtype=torch.bfloat16,\n)\npipe.enable_model_cpu_offload()  # swaps layers in/out of VRAM as needed\nprint(\"FLUX pipeline loaded.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-gen-basic",
+      "kind": "code",
+      "source": "# FLUX takes very literal prompts — describe what you want, including any text.\nprompt = (\n    \"a photo of a vintage dinette menu that reads 'BREAKFAST ALL DAY', \"\n    \"wooden table, soft morning light, shallow depth of field, 50mm lens\"\n)\n\nSEED = 1234\ngenerator = torch.Generator(\"cpu\").manual_seed(SEED)\n\nimage = pipe(\n    prompt=prompt,\n    height=1024,\n    width=1024,\n    num_inference_steps=28,\n    guidance_scale=3.5,\n    generator=generator,\n).images[0]\n\nimage",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-variations",
+      "kind": "code",
+      "source": "# Try a few different aspect ratios and seeds.\nconfigs = [\n    (\"cinematic wide shot of a misty pine forest\", 768, 1344),\n    (\"portrait of a cyborg samurai, ultra-detailed\", 1344, 768),\n    (\"isometric 3D render of a cozy reading nook\", 1024, 1024),\n]\n\nfor i, (p, h, w) in enumerate(configs):\n    g = torch.Generator(\"cpu\").manual_seed(100 + i)\n    img = pipe(prompt=p, height=h, width=w, num_inference_steps=24,\n               guidance_scale=3.5, generator=g).images[0]\n    print(f\"[{i}] {p[:50]}... -> {img.size}\")\n    img.save(f\"flux_out_{i}.png\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-negative",
+      "kind": "code",
+      "source": "# FLUX doesn't accept a `negative_prompt` directly (it's flow-matching, not classifier-free guidance).\n# Instead, push guidance_scale *down* for more literal prompt following or *up* for stylization.\nfor gs in (2.5, 3.5, 5.0):\n    g = torch.Generator(\"cpu\").manual_seed(7)\n    img = pipe(prompt=\"an espresso cup with rising steam, dark background\",\n               height=1024, width=1024, num_inference_steps=24,\n               guidance_scale=gs, generator=g).images[0]\n    print(f\"guidance_scale={gs} -> {img.size}\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "import gc\ndel pipe\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"done\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

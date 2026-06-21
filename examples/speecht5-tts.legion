@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "speecht5-tts.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T09:20:00.000Z",
+    "updated_at": "2026-06-21T09:24:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# SpeechT5 — Text-to-Speech\n\n**Microsoft SpeechT5** is a unified encoder-decoder model for speech processing. This notebook synthesizes natural-sounding English speech from text using speaker embeddings, then writes a WAV file.\n\n## Prerequisites\n\n```bash\npip install transformers torch soundfile numpy\n```\n\n## Notes\n\n- Model: `microsoft/speecht5_tts` (TTS decoder) + `microsoft/speecht5_hifigan` (vocoder).\n- Speaker embeddings from `Matthijs/cmu-arctic-xvectors`.\n- ~2 GB VRAM; runs on CPU at ~1× real-time.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch, soundfile as sf\nfrom pathlib import Path\nfrom transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan\nfrom datasets import load_dataset\n\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nprint(\"device:\", DEVICE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "processor = SpeechT5Processor.from_pretrained(\"microsoft/speecht5_tts\")\nmodel = SpeechT5ForTextToSpeech.from_pretrained(\"microsoft/speecht5_tts\").to(DEVICE).eval()\nvocoder = SpeechT5HifiGan.from_pretrained(\"microsoft/speecht5_hifigan\").to(DEVICE).eval()\nprint(\"SpeechT5 + HiFi-GAN loaded.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-speaker-emb",
+      "kind": "code",
+      "source": "# Load x-vector speaker embeddings from the CMU Arctic dataset.\n# Each x-vector defines the voice characteristics (pitch, timbre, gender, accent).\nembeddings_dataset = load_dataset(\"Matthijs/cmu-arctic-xvectors\", split=\"validation\")\nspeaker_embeddings = torch.tensor(embeddings_dataset[7306][\"xvector\"]).unsqueeze(0).to(DEVICE)\nprint(\"speaker embedding shape:\", speaker_embeddings.shape)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-synth",
+      "kind": "code",
+      "source": "# Synthesize a single sentence.\ntext = \"Hello from Legion Hutta. Speech synthesis is now running locally on your machine.\"\ninputs = processor(text=text, return_tensors=\"pt\").to(DEVICE)\n\nwith torch.inference_mode():\n    speech = model.generate_speech(inputs[\"input_ids\"], speaker_embeddings, vocoder=vocoder)\n\nprint(\"waveform shape:\", speech.shape, \"duration (s):\", speech.shape[0] / 16000)\nsf.write(\"speech_t5.wav\", speech.cpu().numpy(), samplerate=16000)\nprint(\"saved speech_t5.wav\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-listen",
+      "kind": "code",
+      "source": "# Inline playback (works in Jupyter-style frontends).\nfrom IPython.display import Audio, display\nAudio(speech.cpu().numpy(), rate=16000)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-multi-speaker",
+      "kind": "code",
+      "source": "# Loop over multiple speakers to compare voices.\nspeaker_ids = [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000]\ntext = \"This is a test of different speaker voices using SpeechT5.\"\n\nfor sid in speaker_ids:\n    xvec = torch.tensor(embeddings_dataset[sid][\"xvector\"]).unsqueeze(0).to(DEVICE)\n    inputs = processor(text=text, return_tensors=\"pt\").to(DEVICE)\n    with torch.inference_mode():\n        wav = model.generate_speech(inputs[\"input_ids\"], xvec, vocoder=vocoder)\n    sf.write(f\"t5_speaker_{sid:04d}.wav\", wav.cpu().numpy(), 16000)\n    print(f\"speaker {sid}: {wav.shape[0]/16000:.1f}s -> t5_speaker_{sid:04d}.wav\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-long",
+      "kind": "code",
+      "source": "# For long text, split by sentence and concatenate waveforms (avoids decoder token cap).\nimport re\nsentences = re.split(r'(?<=[.!?])\\s+',\n    \"Welcome to the demo. SpeechT5 supports natural prosody. You can chain multiple sentences together easily.\")\n\nchunks = []\nfor s in sentences:\n    inputs = processor(text=s, return_tensors=\"pt\").to(DEVICE)\n    with torch.inference_mode():\n        wav = model.generate_speech(inputs[\"input_ids\"], speaker_embeddings, vocoder=vocoder)\n    chunks.append(wav.cpu())\n\nfull = torch.cat(chunks)\nsf.write(\"speech_long.wav\", full.numpy(), 16000)\nprint(f\"long form: {len(sentences)} sentences, {full.shape[0]/16000:.1f}s total\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "import gc\ndel model, vocoder\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"done\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "format": "legion",
+  "format_version": 1,
+  "metadata": {
+    "title": "bark-tts.legion",
+    "kernel": { "name": "python3", "display_name": "Python 3", "language": "python" },
+    "sandbox": "local",
+    "created_at": "2026-06-21T10:20:00.000Z",
+    "updated_at": "2026-06-21T10:24:00.000Z",
+    "legion_version": "0.3.0",
+    "extensions": {}
+  },
+  "cells": [
+    {
+      "id": "cell-intro",
+      "kind": "markdown",
+      "source": "# Bark — Multilingual Text-to-Speech\n\n**Suno Bark** is a transformer-based TTS model that generates highly expressive, multilingual speech — including non-verbal sounds like `[laughter]`, `[sighs]`, and music. This notebook synthesizes English, Spanish, and French clips, plus a music-style prompt.\n\n## Prerequisites\n\n```bash\npip install transformers torch soundfile scipy numpy\n```\n\n## Notes\n\n- Model: `suno/bark`.\n- ~5 GB VRAM at fp16; runs on CPU at ~0.5× real-time.\n- Bark supports `[clears throat]`, `[laughter]`, `[music]`, etc. as inline tags.\n- Long text should be split into <= 14-second chunks to avoid decoder cutoff.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-imports",
+      "kind": "code",
+      "source": "import torch, numpy as np, soundfile as sf\nfrom transformers import BarkModel, BarkProcessor\n\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nDTYPE = torch.float16 if DEVICE == \"cuda\" else torch.float32\nprint(\"device:\", DEVICE, \"dtype:\", DTYPE)",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-load",
+      "kind": "code",
+      "source": "processor = BarkProcessor.from_pretrained(\"suno/bark\")\nmodel = BarkModel.from_pretrained(\"suno/bark\", torch_dtype=DTYPE).to(DEVICE)\n\n# CPU offload of unused sub-models between passes saves VRAM.\nif DEVICE == \"cuda\":\n    model.enable_cpu_offload()\n\nprint(\"Bark loaded.\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-english",
+      "kind": "code",
+      "source": "# Plain English with a speaker preset.\nvoice_preset = \"v2/en_speaker_6\"\ntext = \"Hello from Legion Hutta. Bark can produce surprisingly expressive speech.\"\n\ninputs = processor(text, voice_preset=voice_preset).to(DEVICE)\nwith torch.inference_mode():\n    audio = model.generate(**inputs, do_sample=True, temperature=0.7)\n\nwav = audio.cpu().numpy().squeeze()\nSR = model.generation_config.sample_rate\nprint(\"sample_rate:\", SR, \"duration (s):\", len(wav) / SR)\nsf.write(\"bark_en.wav\", wav, SR)\nprint(\"saved bark_en.wav\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-multilingual",
+      "kind": "code",
+      "source": "# Try a few languages. Bark auto-detects from the voice preset + text.\nsamples = [\n    (\"v2/es_speaker_1\", \"Hola, bienvenido a la demostración de Bark.\"),\n    (\"v2/fr_speaker_2\", \"Bonjour, bienvenue dans la démonstration de Bark.\"),\n    (\"v2/zh_speaker_0\", \"你好,欢迎使用 Bark 语音合成演示。\"),\n    (\"v2/ja_speaker_3\", \"こんにちは、Bark のデモへようこそ。\"),\n]\n\nfor vp, txt in samples:\n    inputs = processor(txt, voice_preset=vp).to(DEVICE)\n    with torch.inference_mode():\n        a = model.generate(**inputs, do_sample=True, temperature=0.7)\n    wav = a.cpu().numpy().squeeze()\n    name = vp.replace(\"/\", \"_\")\n    sf.write(f\"bark_{name}.wav\", wav, SR)\n    print(f\"{vp} -> {len(wav)/SR:.1f}s -> bark_{name}.wav\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-expressive",
+      "kind": "code",
+      "source": "# Non-verbal tags — Bark can laugh, sigh, sing.\nexpressive = [\n    \"[clears throat] Let me try that again, this time with confidence.\",\n    \"Wow, that's amazing! [laughs] I can't believe it worked.\",\n    \"[sighs] I suppose we'll just have to start over.\",\n]\n\nfor i, t in enumerate(expressive):\n    inputs = processor(t, voice_preset=\"v2/en_speaker_3\").to(DEVICE)\n    with torch.inference_mode():\n        a = model.generate(**inputs, do_sample=True, temperature=0.8)\n    wav = a.cpu().numpy().squeeze()\n    sf.write(f\"bark_expressive_{i}.wav\", wav, SR)\n    print(f\"[{i}] {t[:50]}... -> {len(wav)/SR:.1f}s\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-music",
+      "kind": "code",
+      "source": "# Music-style prompt — Bark can produce sung / melodic output.\nmusic_prompt = \"♪ A gentle acoustic guitar melody under a soft voice singing about the rain ♪\"\ninputs = processor(music_prompt, voice_preset=\"v2/en_speaker_9\").to(DEVICE)\nwith torch.inference_mode():\n    a = model.generate(**inputs, do_sample=True, temperature=0.9, min_eos_p=0.05)\nwav = a.cpu().numpy().squeeze()\nsf.write(\"bark_music.wav\", wav, SR)\nprint(f\"music: {len(wav)/SR:.1f}s -> bark_music.wav\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-long",
+      "kind": "code",
+      "source": "# Long-form: split into <=14s chunks and concatenate with a tiny crossfade.\nimport re\nlong_text = (\n    \"Welcome to the Bark demonstration. \"\n    \"In this example, we synthesize a longer paragraph. \"\n    \"The model handles natural prosody across sentence boundaries. \"\n    \"We split the text into chunks so the decoder stays within its 14-second window. \"\n    \"Each chunk is generated independently and then stitched together with a short crossfade.\"\n)\nsentences = [s.strip() for s in re.split(r'(?<=[.!?])\\s+', long_text) if s.strip()]\n\npieces = []\nfor s in sentences:\n    inputs = processor(s, voice_preset=\"v2/en_speaker_6\").to(DEVICE)\n    with torch.inference_mode():\n        a = model.generate(**inputs, do_sample=True, temperature=0.7)\n    pieces.append(a.cpu().numpy().squeeze())\n\n# Crossfade: overlap the last 1k samples with the first 1k of the next.\noverlap = 1000\nmerged = pieces[0].tolist()\nfor p in pieces[1:]:\n    for i in range(overlap):\n        merged[-overlap + i] = merged[-overlap + i] * (1 - i / overlap) + p[i] * (i / overlap)\n    merged.extend(p[overlap:].tolist())\n\nwav = np.array(merged, dtype=np.float32)\nsf.write(\"bark_long.wav\", wav, SR)\nprint(f\"long: {len(wav)/SR:.1f}s from {len(sentences)} chunks -> bark_long.wav\")",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-cleanup",
+      "kind": "code",
+      "source": "import gc\ndel model\ngc.collect()\ntorch.cuda.empty_cache()\nprint(\"done\")",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}
