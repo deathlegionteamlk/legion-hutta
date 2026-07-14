@@ -245,3 +245,6 @@ MIT — see [LICENSE](./LICENSE).
 ## 🧠 Credits
 
 Built by **Death Legion Team** — _better than all notebooks_.
+
+<!-- Badge earned via contribution -->
+![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)
